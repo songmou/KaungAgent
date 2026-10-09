@@ -1,0 +1,56 @@
+@page "/"
+@rendermode InteractiveServer
+@inject ModelProfileService Models
+@inject McpRegistryService Mcp
+@inject ConversationService Conversations
+
+<PageTitle>Kaung Agent 工作台</PageTitle>
+
+<header class="page-header">
+    <div><span class="eyebrow">LOCAL AGENT WORKSPACE</span><h1>让模型和工具，在一个地方协作。</h1><p>配置模型、连接 MCP，然后开始一段可追踪的智能对话。</p></div>
+    <a class="button primary" href="/chat">开始对话 <span>→</span></a>
+</header>
+
+@if (_loading) { <div class="loading">正在读取工作区…</div> }
+else
+{
+    <section class="metrics">
+        <article><span>默认模型</span><strong>@(_models.FirstOrDefault(x => x.IsDefault)?.Name ?? "尚未配置")</strong><small>@(_models.FirstOrDefault(x => x.IsDefault)?.ModelId ?? "前往模型管理完成配置")</small></article>
+        <article><span>MCP 服务</span><strong>@_servers.Count(x => x.IsEnabled) / @_servers.Count</strong><small>@_servers.Count(x => x.LastStatus == "online") 个在线</small></article>
+        <article><span>历史会话</span><strong>@_conversations.Count</strong><small>数据保存在本机</small></article>
+    </section>
+
+    @if (!_models.Any(x => x.IsDefault && x.IsEnabled))
+    {
+        <section class="notice"><div><strong>先配置一个默认模型</strong><p>Kaung Agent 支持 OpenAI Chat Completions 兼容接口。</p></div><a class="button" href="/models">配置模型</a></section>
+    }
+
+    <section class="section-grid">
+        <div class="panel">
+            <div class="panel-title"><div><span class="eyebrow">RECENT</span><h2>最近会话</h2></div><a href="/chat">查看全部</a></div>
+            @if (_conversations.Count == 0) { <div class="empty-inline">还没有会话，创建第一段对话吧。</div> }
+            @foreach (var item in _conversations.Take(5))
+            {
+                <a class="list-row" href="@($"/chat/{item.Id}")"><div><strong>@item.Title</strong><small>@item.MessageCount 条消息 · @item.UpdatedAtUtc.ToLocalTime().ToString("MM-dd HH:mm")</small></div><span>→</span></a>
+            }
+        </div>
+        <div class="panel">
+            <div class="panel-title"><div><span class="eyebrow">CONNECTIONS</span><h2>MCP 状态</h2></div><a href="/mcp">管理</a></div>
+            @foreach (var item in _servers.Take(5))
+            {
+                <div class="list-row"><div><strong>@item.Name</strong><small>@item.Endpoint</small></div><span class="badge @(item.LastStatus == "online" ? "success" : "muted")">@(item.LastStatus == "online" ? "在线" : item.LastStatus ?? "未检测")</span></div>
+            }
+        </div>
+    </section>
+}
+
+@code {
+    private bool _loading = true;
+    private IReadOnlyList<ModelProfileResponse> _models = [];
+    private IReadOnlyList<McpServerResponse> _servers = [];
+    private IReadOnlyList<ConversationSummary> _conversations = [];
+    protected override async Task OnInitializedAsync()
+    {
+        _models = await Models.ListAsync(); _servers = await Mcp.ListAsync(); _conversations = await Conversations.ListAsync(); _loading = false;
+    }
+}

@@ -1,0 +1,15 @@
+@inherits LayoutComponentBase
+
+<div class="shell">
+    <aside class="sidebar">
+        <a class="brand" href="/"><span class="brand-mark">K</span><span>Kaung Agent</span></a>
+        <nav>
+            <NavLink href="/" Match="NavLinkMatch.All"><span>⌂</span> 工作台</NavLink>
+            <NavLink href="/chat"><span>◌</span> 对话</NavLink>
+            <NavLink href="/models"><span>◇</span> 模型管理</NavLink>
+            <NavLink href="/mcp"><span>⌘</span> MCP 集成</NavLink>
+        </nav>
+        <div class="sidebar-foot"><span class="status-dot"></span> 本机工作区</div>
+    </aside>
+    <main class="content">@Body</main>
+</div>

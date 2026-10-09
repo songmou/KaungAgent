@@ -1,0 +1,112 @@
+@page "/mcp"
+@rendermode InteractiveServer
+@inject McpRegistryService Service
+@inject ChatDraftService Draft
+@inject NavigationManager Navigation
+
+<PageTitle>MCP 集成 · Kaung Agent</PageTitle>
+<header class="page-header compact"><div><span class="eyebrow">MODEL CONTEXT PROTOCOL</span><h1>MCP 集成</h1><p>连接远程 MCP，发现并直接体验工具、提示词和资源。</p></div><button class="button primary" @onclick="NewServer">＋ 添加 MCP</button></header>
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="flash @(_isError ? "error" : "success")">@_message</div> }
+
+<div class="mcp-layout">
+    <aside class="panel list-panel">
+        @foreach (var item in _items)
+        {
+            <button class="config-card @(_selected?.Id == item.Id ? "selected" : "")" @onclick="() => Select(item)">
+                <span class="config-icon">⌘</span><span><strong>@item.Name</strong><small>@item.Endpoint</small></span>
+                <span class="status-dot @(item.LastStatus == "online" ? "online" : "")"></span>
+            </button>
+        }
+    </aside>
+    <section class="panel mcp-detail">
+        @if (_showEditor)
+        {
+            <div class="panel-title"><div><span class="eyebrow">CONNECTION</span><h2>@(_editingId is null ? "添加 MCP" : "编辑 MCP")</h2></div></div>
+            @if (_selected?.IsManaged == true)
+            {
+                <div class="notice"><div><strong>受管连接</strong><p>地址和凭据由启动脚本维护，可在下方启用或禁用。</p></div></div>
+            }
+            <EditForm Model="_form" OnValidSubmit="Save">
+                <div class="form-grid">
+                    <label><span>名称</span><InputText @bind-Value="_form.Name" disabled="@(_selected?.IsManaged == true)" /></label>
+                    <label><span>超时（秒）</span><InputNumber @bind-Value="_form.TimeoutSeconds" disabled="@(_selected?.IsManaged == true)" /></label>
+                    <label class="full"><span>说明</span><InputText @bind-Value="_form.Description" disabled="@(_selected?.IsManaged == true)" /></label>
+                    <label class="full"><span>HTTP Endpoint</span><InputText @bind-Value="_form.Endpoint" disabled="@(_selected?.IsManaged == true)" /></label>
+                    <label class="full"><span>请求头 JSON @(_editingId is null ? "" : "（留空则不修改）")</span><InputTextArea @bind-Value="_form.HeadersJson" disabled="@(_selected?.IsManaged == true)" placeholder='{"Authorization":"Bearer ..."}' /></label>
+                    <label class="check"><InputCheckbox @bind-Value="_form.IsEnabled" /><span>启用</span></label>
+                </div>
+                <div class="actions"><button class="button primary" type="submit" disabled="@_busy">保存</button>@if(_editingId is not null){<button class="button" type="button" @onclick="Refresh" disabled="@_busy">连接并发现</button>@if(_selected?.IsManaged != true){<button class="button danger" type="button" @onclick="Delete" disabled="@_busy">删除</button>}}</div>
+            </EditForm>
+        }
+        else if (_selected is not null)
+        {
+            <div class="server-hero"><div><span class="badge @(_selected.LastStatus == "online" ? "success" : "muted")">@(_selected.LastStatus == "online" ? "在线" : _selected.LastStatus ?? "未检测")</span><h2>@_selected.Name</h2><p>@(_selected.Description ?? "暂无说明")</p><code>@_selected.Endpoint</code></div><div class="actions"><button class="button" @onclick="EditSelected">编辑</button><button class="button primary" @onclick="Refresh" disabled="@_busy">刷新能力</button></div></div>
+            @if (!string.IsNullOrWhiteSpace(_selected.LastError)) { <div class="flash error">@_selected.LastError</div> }
+            @if (_selected.Snapshot is null) { <div class="empty-state"><h2>尚未发现能力</h2><p>点击“刷新能力”连接服务并读取清单。</p></div> }
+            else
+            {
+                <div class="tabbar">
+                    <button class="@(_tab == "tools" ? "active" : "")" @onclick="ShowTools">工具 @_selected.Snapshot.Tools.Count</button>
+                    <button class="@(_tab == "prompts" ? "active" : "")" @onclick="ShowPrompts">提示词 @_selected.Snapshot.Prompts.Count</button>
+                    <button class="@(_tab == "resources" ? "active" : "")" @onclick="ShowResources">资源 @(_selected.Snapshot.Resources.Count + _selected.Snapshot.ResourceTemplates.Count)</button>
+                </div>
+                @if (_tab == "tools")
+                {
+                    <div class="capability-grid">@foreach(var item in _selected.Snapshot.Tools){<button class="capability-card" @onclick="() => OpenTool(item)"><strong>@(item.Title??item.Name)</strong><small>@item.Name</small><p>@(item.Description??"暂无描述")</p></button>}</div>
+                }
+                else if (_tab == "prompts")
+                {
+                    <div class="capability-grid">@foreach(var item in _selected.Snapshot.Prompts){<button class="capability-card" @onclick="() => OpenPrompt(item)"><strong>@(item.Title??item.Name)</strong><small>@item.Name</small><p>@(item.Description??"暂无描述")</p></button>}</div>
+                }
+                else
+                {
+                    <div class="capability-grid">@foreach(var item in _selected.Snapshot.Resources){<button class="capability-card" @onclick="() => OpenResource(item)"><strong>@(item.Title??item.Name)</strong><small>@item.Uri</small><p>@(item.Description??item.MimeType??"资源")</p></button>}@foreach(var item in _selected.Snapshot.ResourceTemplates){<button class="capability-card" @onclick="() => OpenTemplate(item)"><strong>@(item.Title??item.Name)</strong><small>@item.Uri</small><p>@(item.Description??"资源模板")</p></button>}</div>
+                }
+                @if (_capability is not null)
+                {
+                    <section class="runner">
+                        <div class="panel-title"><div><span class="eyebrow">INTERACTION</span><h2>@(_capability.Title??_capability.Name)</h2></div><button class="icon-button" @onclick="()=>_capability=null">×</button></div>
+                        <p>@_capability.Description</p>
+                        @if (_capabilityType == "tool" && _schemaFields.Count > 0 && !_rawMode)
+                        {
+                            <div class="form-grid">@foreach (var field in _schemaFields){<label><span>@field.Name @(field.Required ? "*" : "") · @field.Type</span><input value="@_schemaValues.GetValueOrDefault(field.Name)" @oninput="e => SetSchemaValue(field.Name, e.Value?.ToString())" placeholder="@field.Description" /></label>}</div>
+                        }
+                        else
+                        {
+                            <label><span>@(_capabilityType is "resource" ? "资源 URI" : "参数 JSON")</span><textarea @bind="_argumentsJson"></textarea></label>
+                        }
+                        <div class="actions"><button class="button primary" @onclick="RunCapability" disabled="@_busy">执行</button>@if(_capabilityType=="tool"&&_schemaFields.Count>0){<button class="button" @onclick="()=>_rawMode=!_rawMode">@(_rawMode?"使用表单":"使用原始 JSON")</button>}</div>
+                        @if(_result is not null){<pre class="result">@_result</pre><button class="button" @onclick="SendResultToChat">发送到对话</button>}
+                    </section>
+                }
+            }
+        }
+        else { <div class="empty-state"><h2>选择一个 MCP 服务</h2><p>查看连接状态、能力描述并直接交互。</p></div> }
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<McpServerResponse> _items=[]; private McpServerResponse? _selected; private McpCapabilityItem? _capability;
+    private SaveMcpServerRequest _form=new(); private Guid? _editingId; private string _tab="tools",_capabilityType="tool",_argumentsJson="{}"; private string? _result,_message; private bool _showEditor,_busy,_isError,_rawMode;
+    private List<SchemaField> _schemaFields=[]; private Dictionary<string,string?> _schemaValues=[];
+    protected override async Task OnInitializedAsync()=>await Reload();
+    private void NewServer(){_selected=null;_editingId=null;_form=new();_showEditor=true;_message=null;}
+    private void Select(McpServerResponse item){_selected=item;_editingId=item.Id;_showEditor=false;_capability=null;_result=null;}
+    private void EditSelected(){if(_selected is null)return;_form=new(){Name=_selected.Name,Description=_selected.Description,Endpoint=_selected.Endpoint,TimeoutSeconds=_selected.TimeoutSeconds,IsEnabled=_selected.IsEnabled};_editingId=_selected.Id;_showEditor=true;}
+    private void OpenCapability(string type,McpCapabilityItem item){_capabilityType=type;_capability=item;_argumentsJson=type=="resource"?(item.Uri??""):"{}";_result=null;_rawMode=false;LoadSchema(item);}
+    private void ShowTools()=>_tab="tools"; private void ShowPrompts()=>_tab="prompts"; private void ShowResources()=>_tab="resources";
+    private void OpenTool(McpCapabilityItem item)=>OpenCapability("tool",item); private void OpenPrompt(McpCapabilityItem item)=>OpenCapability("prompt",item); private void OpenResource(McpCapabilityItem item)=>OpenCapability("resource",item); private void OpenTemplate(McpCapabilityItem item)=>OpenCapability("template",item);
+    private async Task Save()=>await Act(async()=>{if(_selected?.IsManaged==true){await Service.SetEnabledAsync(_selected.Id,_form.IsEnabled);}else{var saved=await Service.SaveAsync(_editingId,_form);_editingId=saved.Id;}await ReloadSelect();_showEditor=false;_message="MCP 配置已保存。";});
+    private async Task Refresh()=>await Act(async()=>{if(_editingId is null)return;await Service.RefreshAsync(_editingId.Value);await ReloadSelect();_showEditor=false;_message="能力清单已刷新。";});
+    private async Task Delete()=>await Act(async()=>{await Service.DeleteAsync(_editingId!.Value);_selected=null;_editingId=null;_showEditor=false;await Reload();_message="MCP 服务已删除。";});
+    private async Task RunCapability()=>await Act(async()=>{if(_selected is null||_capability is null)return;McpOperationResult op;if(_capabilityType=="tool")op=await Service.InvokeToolAsync(_selected.Id,_capability.Name,Args());else if(_capabilityType=="prompt")op=await Service.GetPromptAsync(_selected.Id,_capability.Name,Args());else if(_capabilityType=="resource")op=await Service.ReadResourceAsync(_selected.Id,_argumentsJson,null);else op=await Service.ReadResourceAsync(_selected.Id,_capability.Uri!,Args());_result=JsonSerializer.Serialize(op.Result,new JsonSerializerOptions{WriteIndented=true});_isError=!op.Succeeded;});
+    private Dictionary<string,object?> Args(){if(_capabilityType=="tool"&&_schemaFields.Count>0&&!_rawMode)return _schemaFields.Where(x=>!string.IsNullOrWhiteSpace(_schemaValues.GetValueOrDefault(x.Name))).ToDictionary(x=>x.Name,x=>ConvertValue(x.Type,_schemaValues[x.Name]!));using var doc=JsonDocument.Parse(string.IsNullOrWhiteSpace(_argumentsJson)?"{}":_argumentsJson);return doc.RootElement.EnumerateObject().ToDictionary(x=>x.Name,x=>(object?)x.Value.Clone());}
+    private void LoadSchema(McpCapabilityItem item){_schemaFields=[];_schemaValues=[];if(!item.Definition.TryGetProperty("inputSchema",out var schema)||!schema.TryGetProperty("properties",out var properties))return;var required=schema.TryGetProperty("required",out var req)&&req.ValueKind==JsonValueKind.Array?req.EnumerateArray().Select(x=>x.GetString()).ToHashSet():[];foreach(var property in properties.EnumerateObject()){var value=property.Value;var type=value.TryGetProperty("type",out var t)?t.GetString()??"string":"string";var description=value.TryGetProperty("description",out var d)?d.GetString():null;_schemaFields.Add(new(property.Name,type,description,required.Contains(property.Name)));_schemaValues[property.Name]=null;}}
+    private void SetSchemaValue(string name,string? value)=>_schemaValues[name]=value;
+    private static object? ConvertValue(string type,string value)=>type switch{"integer"=>long.TryParse(value,out var number)?number:value,"number"=>double.TryParse(value,out var number)?number:value,"boolean"=>bool.TryParse(value,out var flag)?flag:value,"object" or "array"=>JsonSerializer.Deserialize<JsonElement>(value),_=>value};
+    private void SendResultToChat(){if(_result is null)return;Draft.Content=$"来自 MCP {_selected?.Name} / {_capability?.Name} 的结果：\n\n```json\n{_result}\n```";Navigation.NavigateTo("/chat");}
+    private async Task Reload()=>_items=await Service.ListAsync();
+    private async Task ReloadSelect(){var id=_editingId;await Reload();_selected=_items.FirstOrDefault(x=>x.Id==id);}
+    private async Task Act(Func<Task> action){_busy=true;_message=null;_isError=false;try{await action();}catch(Exception e){_message=e.Message;_isError=true;}finally{_busy=false;}}
+    private sealed record SchemaField(string Name,string Type,string? Description,bool Required);
+}

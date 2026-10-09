@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.db
+*.db-shm
+*.db-wal
+data/
+/.kaung/
+**/.kaung/
+TestResults/
+coverage/
+
+TODO.md

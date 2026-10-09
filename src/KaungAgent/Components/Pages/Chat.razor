@@ -1,0 +1,66 @@
+@page "/chat"
+@page "/chat/{ConversationId:guid}"
+@rendermode InteractiveServer
+@inject ConversationService Service
+@inject ChatOrchestrator Orchestrator
+@inject ModelProfileService Models
+@inject McpRegistryService Mcp
+@inject NavigationManager Navigation
+@inject ChatDraftService Draft
+
+<PageTitle>对话 · Kaung Agent</PageTitle>
+<div class="chat-shell">
+    <aside class="conversation-list panel">
+        <button class="button primary wide" @onclick="Create" disabled="@_creating">@(_creating ? "正在创建…" : "＋ 新对话")</button>
+        @foreach(var item in _summaries){<a class="conversation-item @(ConversationId==item.Id?"active":"")" href="@($"/chat/{item.Id}")"><strong>@item.Title</strong><small>@item.UpdatedAtUtc.ToLocalTime().ToString("MM-dd HH:mm")</small></a>}
+    </aside>
+    <section class="chat-main panel">
+        @if (_current is null)
+        {
+            <div class="empty-state">
+                <span class="hero-icon">◌</span>
+                <h1>开始一段新对话</h1>
+                <p>模型可以自动使用你为会话选择的 MCP 工具。</p>
+                @if (!string.IsNullOrWhiteSpace(_status))
+                {
+                    <div class="flash error">@_status <a href="/models">前往模型管理</a></div>
+                }
+                <button class="button primary" @onclick="Create" disabled="@_creating">@(_creating ? "正在创建…" : "创建对话")</button>
+            </div>
+        }
+        else
+        {
+            <header class="chat-header"><div><input class="title-input" value="@_current.Title" @onchange="Rename" /><small>@(_models.FirstOrDefault(x=>x.Id==_current.ModelProfileId)?.Name)</small></div><div class="actions"><button class="button" @onclick="()=>_showSettings=!_showSettings">会话设置</button><button class="button danger" @onclick="Delete">删除</button></div></header>
+            @if(_showSettings){<section class="chat-settings"><label><span>模型</span><select @bind="_selectedModelId">@foreach(var model in _models.Where(x=>x.IsEnabled)){<option value="@model.Id">@model.Name</option>}</select></label><div><span>可用 MCP 与工具</span>@foreach(var server in _servers.Where(x=>x.IsEnabled)){<div class="tool-picker"><label class="check"><input type="checkbox" checked="@_selectedServers.Contains(server.Id)" @onchange="e=>ToggleServer(server,e.Value as bool?==true)"/><strong>@server.Name</strong></label>@if(_selectedServers.Contains(server.Id)&&server.Snapshot is not null){<div class="tool-chips">@foreach(var tool in server.Snapshot.Tools){<label class="check chip"><input type="checkbox" checked="@IsToolSelected(server.Id,tool.Name)" @onchange="e=>ToggleTool(server.Id,tool.Name,e.Value as bool?==true)"/>@tool.Name</label>}</div>}</div>}</div><button class="button primary" @onclick="SaveSettings">保存设置</button></section>}
+            <div class="messages" id="messages">
+                @foreach(var message in _current.Messages.Where(x=>x.Role!="tool"))
+                {
+                    <article class="message @message.Role"><div class="avatar">@(message.Role=="user"?"你":message.Role=="system"?"摘":"K")</div><div class="bubble">@if(message.Role=="system"&&message.Status=="context-summary"){<div class="context-summary-label">上下文摘要</div><div class="markdown">@((MarkupString)RenderMarkdown(message.Content))</div>}else if(message.Role=="assistant"){<div class="markdown">@((MarkupString)RenderMarkdown(message.Content))</div>}else{<p>@message.Content</p>}@foreach(var tool in message.ToolExecutions){<details class="tool-trace"><summary><span class="status-dot @(tool.Succeeded?"online":"")"></span>@tool.ToolName · @tool.DurationMilliseconds ms</summary><pre>@tool.ArgumentsJson</pre><pre>@(tool.ResultJson??tool.Error)</pre></details>}@if(message.TotalTokens is not null){<small class="meta">@message.TotalTokens tokens · @message.DurationMilliseconds ms</small>}</div></article>
+                }
+                @if(!string.IsNullOrEmpty(_streamingText)){<article class="message assistant"><div class="avatar">K</div><div class="bubble"><div class="markdown">@((MarkupString)RenderMarkdown(_streamingText))</div><span class="cursor"></span></div></article>}
+                @if(!string.IsNullOrEmpty(_status)){<div class="thinking">@_status</div>}
+            </div>
+            <footer class="composer"><textarea @bind="_input" @bind:event="oninput" placeholder="输入消息…" disabled="@_running"></textarea>@if(_running){<button class="button danger" @onclick="Stop">停止</button>}else{<button class="button" @onclick="Retry" disabled="@(!_current.Messages.Any(x=>x.Role=="user"))">重新生成</button><button class="button primary" @onclick="Send" disabled="@(string.IsNullOrWhiteSpace(_input))">发送 ↑</button>}</footer>
+        }
+    </section>
+</div>
+
+@code {
+    [Parameter] public Guid? ConversationId {get;set;}
+    private IReadOnlyList<ConversationSummary> _summaries=[]; private IReadOnlyList<ModelProfileResponse> _models=[]; private IReadOnlyList<McpServerResponse> _servers=[]; private ConversationDetail? _current;
+    private string _input="",_streamingText="",_status=""; private bool _running,_creating,_showSettings; private CancellationTokenSource? _cts; private Guid _selectedModelId; private HashSet<Guid> _selectedServers=[]; private Dictionary<Guid,HashSet<string>> _selectedTools=[];
+    protected override async Task OnParametersSetAsync(){_summaries=await Service.ListAsync();_models=await Models.ListAsync();_servers=await Mcp.ListAsync();if(!string.IsNullOrWhiteSpace(Draft.Content)){_input=Draft.Content;Draft.Content=null;}if(ConversationId is not null){_current=await Service.GetAsync(ConversationId.Value);if(_current is not null)LoadSettings();}else _current=null;}
+    private async Task Create(){if(_creating)return;_creating=true;_status="";try{var item=await Service.CreateAsync();Navigation.NavigateTo($"/chat/{item.Id}");}catch(Exception e){_status=e.Message;}finally{_creating=false;}}
+    private async Task Send(){if(_current is null||string.IsNullOrWhiteSpace(_input))return;var text=_input;_input="";_streamingText="";_status="";_running=true;_cts=new();try{await Orchestrator.SendAsync(_current.Id,text,OnEvent,_cts.Token);}catch(OperationCanceledException){_status="已停止生成。";}catch(Exception e){_status=e.Message;}finally{_running=false;_current=await Service.GetAsync(_current.Id);_summaries=await Service.ListAsync();_streamingText="";StateHasChanged();}}
+    private async Task Retry(){if(_current is null)return;_streamingText="";_status="";_running=true;_cts=new();try{await Orchestrator.RetryAsync(_current.Id,OnEvent,_cts.Token);}catch(OperationCanceledException){_status="已停止生成。";}catch(Exception e){_status=e.Message;}finally{_running=false;_current=await Service.GetAsync(_current.Id);_streamingText="";StateHasChanged();}}
+    private Task OnEvent(ChatStreamEvent evt){return InvokeAsync(()=>{if(evt.Type=="delta")_streamingText+=evt.Text;else if(evt.Type=="status")_status=evt.Text??"";else if(evt.Type=="tool-start")_status=$"正在调用 {evt.ToolName}…";else if(evt.Type=="tool")_status=evt.Succeeded==true?$"{evt.ToolName} 调用完成":$"{evt.ToolName} 调用失败：{evt.Error}";else if(evt.Type=="completed")_status="";else if(evt.Type=="error")_status=evt.Error??"执行失败";StateHasChanged();});}
+    private void Stop()=>_cts?.Cancel();
+    private async Task Rename(ChangeEventArgs e){if(_current is null)return;await Service.RenameAsync(_current.Id,e.Value?.ToString()??"");_summaries=await Service.ListAsync();}
+    private async Task Delete(){if(_current is null)return;await Service.DeleteAsync(_current.Id);Navigation.NavigateTo("/chat");}
+    private void LoadSettings(){if(_current is null)return;_selectedModelId=_current.ModelProfileId;_selectedServers=_current.ToolSelections.Select(x=>x.ServerId).ToHashSet();_selectedTools=_current.ToolSelections.ToDictionary(x=>x.ServerId,x=>x.Tools is null?(_servers.FirstOrDefault(s=>s.Id==x.ServerId)?.Snapshot?.Tools.Select(t=>t.Name).ToHashSet()??[]):x.Tools.ToHashSet());}
+    private void ToggleServer(McpServerResponse server,bool enabled){if(enabled){_selectedServers.Add(server.Id);_selectedTools[server.Id]=server.Snapshot?.Tools.Select(x=>x.Name).ToHashSet()??[];}else{_selectedServers.Remove(server.Id);_selectedTools.Remove(server.Id);}}
+    private bool IsToolSelected(Guid id,string tool)=>_selectedTools.TryGetValue(id,out var set)&&set.Contains(tool);
+    private void ToggleTool(Guid id,string tool,bool enabled){if(!_selectedTools.TryGetValue(id,out var set))_selectedTools[id]=set=[];if(enabled)set.Add(tool);else set.Remove(tool);}
+    private async Task SaveSettings(){if(_current is null)return;var selections=_selectedServers.Select(id=>{var all=_servers.FirstOrDefault(s=>s.Id==id)?.Snapshot?.Tools.Select(t=>t.Name).ToHashSet()??[];var chosen=_selectedTools.GetValueOrDefault(id)??[];return new ConversationToolSelection(id,chosen.SetEquals(all)?null:chosen.ToList());}).ToList();await Service.UpdateSettingsAsync(_current.Id,_selectedModelId,selections);_showSettings=false;_status="设置已保存。";_current=await Service.GetAsync(_current.Id);}
+    private static string RenderMarkdown(string? text){if(string.IsNullOrEmpty(text))return "";var encoded=System.Net.WebUtility.HtmlEncode(text);encoded=System.Text.RegularExpressions.Regex.Replace(encoded,"```([\\s\\S]*?)```","<pre><code>$1</code></pre>");encoded=System.Text.RegularExpressions.Regex.Replace(encoded,"`([^`]+)`","<code>$1</code>");encoded=System.Text.RegularExpressions.Regex.Replace(encoded,"\\*\\*([^*]+)\\*\\*","<strong>$1</strong>");return encoded.Replace("\n","<br />");}
+}

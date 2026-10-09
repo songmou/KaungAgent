@@ -1,0 +1,59 @@
+@page "/models"
+@rendermode InteractiveServer
+@inject ModelProfileService Service
+
+<PageTitle>模型管理 · Kaung Agent</PageTitle>
+<header class="page-header compact"><div><span class="eyebrow">MODEL PROFILES</span><h1>模型管理</h1><p>管理 OpenAI 兼容模型。密钥只会加密保存在本机。</p></div><button class="button primary" @onclick="NewProfile">＋ 添加模型</button></header>
+
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="flash @(_isError ? "error" : "success")">@_message</div> }
+
+<div class="management-grid">
+    <section class="panel list-panel">
+        @if (_items.Count == 0) { <div class="empty-state"><h2>尚未配置模型</h2><p>添加一个兼容 Chat Completions 的模型即可开始。</p></div> }
+        @foreach (var item in _items)
+        {
+            <button class="config-card @(_editingId == item.Id ? "selected" : "")" @onclick="() => Edit(item)">
+                <span class="config-icon">◇</span><span><strong>@item.Name</strong><small>@item.ModelId</small><small>@item.BaseUrl</small></span>
+                <span class="badge @(item.IsEnabled ? "success" : "muted")">@(item.IsDefault ? "默认" : item.IsEnabled ? "启用" : "停用")</span>
+            </button>
+        }
+    </section>
+    <section class="panel editor-panel">
+        <div class="panel-title"><div><span class="eyebrow">CONFIGURATION</span><h2>@(_editingId is null ? "添加模型" : "编辑模型")</h2></div></div>
+        <EditForm Model="_form" OnValidSubmit="Save">
+            <div class="form-grid">
+                <label><span>显示名称</span><InputText @bind-Value="_form.Name" placeholder="例如：主力模型" /></label>
+                <label><span>模型 ID</span><InputText @bind-Value="_form.ModelId" placeholder="例如：gpt-4o-mini" /></label>
+                <label class="full"><span>Base URL</span><InputText @bind-Value="_form.BaseUrl" placeholder="https://api.openai.com/v1" /></label>
+                <label class="full"><span>API Key @(_editingId is null ? "" : "（留空则不修改）")</span><InputText type="password" @bind-Value="_form.ApiKey" autocomplete="new-password" /></label>
+                <label class="full"><span>自定义请求头 JSON @(_editingId is null ? "" : "（留空则不修改）")</span><InputTextArea @bind-Value="_form.HeadersJson" placeholder='{"api-key":"..."}' /></label>
+                <label><span>温度</span><InputNumber @bind-Value="_form.Temperature" step="0.1" /></label>
+                <label><span>最大输出 Token</span><InputNumber @bind-Value="_form.MaxOutputTokens" /></label>
+                <label><span>超时（秒）</span><InputNumber @bind-Value="_form.TimeoutSeconds" /></label>
+                <label class="check"><InputCheckbox @bind-Value="_form.IsEnabled" /><span>启用</span></label>
+                <label class="check"><InputCheckbox @bind-Value="_form.IsDefault" /><span>设为默认</span></label>
+            </div>
+            <div class="actions"><button class="button primary" type="submit" disabled="@_busy">保存</button>@if (_editingId is not null){<button class="button" type="button" @onclick="Test" disabled="@_busy">测试连接</button><button class="button danger" type="button" @onclick="Delete" disabled="@_busy">删除</button>}</div>
+        </EditForm>
+    </section>
+</div>
+
+@code {
+    private IReadOnlyList<ModelProfileResponse> _items = [];
+    private SaveModelProfileRequest _form = NewForm();
+    private Guid? _editingId;
+    private string? _message; private bool _isError; private bool _busy;
+    protected override async Task OnInitializedAsync() => await Reload();
+    private static SaveModelProfileRequest NewForm() => new();
+    private void NewProfile() { _editingId = null; _form = NewForm(); _message = null; }
+    private void Edit(ModelProfileResponse item)
+    {
+        _editingId = item.Id; _form = new() { Name=item.Name, BaseUrl=item.BaseUrl, ModelId=item.ModelId, Temperature=item.Temperature, MaxOutputTokens=item.MaxOutputTokens, TimeoutSeconds=item.TimeoutSeconds, IsEnabled=item.IsEnabled, IsDefault=item.IsDefault };
+        _message = item.HeaderNames.Count > 0 ? $"已保存请求头：{string.Join("、", item.HeaderNames)}。留空不会修改。" : null; _isError = false;
+    }
+    private async Task Save() => await Act(async () => { var saved = await Service.SaveAsync(_editingId, _form); _editingId = saved.Id; await Reload(); _message = "模型配置已保存。"; });
+    private async Task Test() => await Act(async () => { var result = await Service.TestAsync(_editingId!.Value); _message = $"{result.Message}（{result.DurationMilliseconds} ms）"; _isError = !result.Succeeded; });
+    private async Task Delete() => await Act(async () => { await Service.DeleteAsync(_editingId!.Value); NewProfile(); await Reload(); _message = "模型配置已删除。"; });
+    private async Task Reload() => _items = await Service.ListAsync();
+    private async Task Act(Func<Task> action) { _busy=true; _message=null; _isError=false; try { await action(); } catch(Exception e){_message=e.Message;_isError=true;} finally{_busy=false;} }
+}

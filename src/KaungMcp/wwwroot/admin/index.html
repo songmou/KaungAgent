@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>KaungMcp 管理</title>
+  <link rel="stylesheet" href="/admin/admin.css">
+  <script src="/admin/admin.js" defer></script>
+  <script src="/admin/scheduler.js" defer></script>
+</head>
+<body>
+  <div id="login" class="login-shell">
+    <form id="login-form" class="login-card">
+      <div class="brand-mark">K</div>
+      <p class="eyebrow">KAUNG MCP / ADMIN</p>
+      <h1>管理工作台</h1>
+      <p class="muted">输入管理员密钥，管理客户端、调用日志和服务配置。密钥仅保存在当前标签页会话中。</p>
+      <label>管理员密钥<input id="admin-key" type="password" autocomplete="off" required></label>
+      <button class="button primary wide" type="submit">进入管理页面</button>
+      <p id="login-error" class="error-text" role="alert"></p>
+    </form>
+  </div>
+  <div id="shell" class="shell hidden">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">K</span><span>KaungMcp<small>管理工作台</small></span></div>
+      <nav aria-label="管理导航">
+        <button data-tab="overview" class="active">概览</button>
+        <button data-tab="tools">工具管理</button>
+        <button data-tab="scheduler">定时任务</button>
+        <button data-tab="clients">客户端与密钥</button>
+        <button data-tab="logs">调用日志</button>
+        <button data-tab="search">搜索配置</button>
+        <button data-tab="fetch">网页读取</button>
+        <button data-tab="service">服务与安全</button>
+      </nav>
+      <div class="sidebar-bottom"><a href="/" target="_blank">服务状态</a><button id="logout">退出管理</button></div>
+    </aside>
+    <main class="main">
+      <div class="topline"><span>本地服务管理</span><span id="connection" class="live-dot">已连接</span></div>
+      <div id="flash" class="flash hidden" role="status"></div>
+      <section id="overview" class="view"></section>
+      <section id="tools" class="view hidden"></section>
+      <section id="scheduler" class="view hidden"></section>
+      <section id="clients" class="view hidden"></section>
+      <section id="logs" class="view hidden"></section>
+      <section id="search" class="view hidden"></section>
+      <section id="fetch" class="view hidden"></section>
+      <section id="service" class="view hidden"></section>
+    </main>
+  </div>
+  <dialog id="tool-detail-dialog" aria-labelledby="tool-detail-title">
+    <div class="dialog-head"><div><p class="eyebrow">TOOL DETAILS</p><h2 id="tool-detail-title">工具详情</h2></div><button id="close-tool-detail" class="icon-button" aria-label="关闭工具详情">×</button></div>
+    <div id="tool-detail-content"></div>
+  </dialog>
+  <dialog id="scheduler-dialog" aria-labelledby="scheduler-dialog-title">
+    <div class="dialog-head"><h2 id="scheduler-dialog-title">定时任务</h2><button id="close-scheduler-dialog" class="icon-button" aria-label="关闭">×</button></div>
+    <div id="scheduler-dialog-content"></div>
+  </dialog>
+  <dialog id="log-detail-dialog" aria-labelledby="log-detail-title">
+    <div class="dialog-head"><h2 id="log-detail-title">调用详情</h2><button id="close-log-detail" class="icon-button" aria-label="关闭详情" autofocus>×</button></div>
+    <p id="log-detail-status" class="muted" role="status" aria-live="polite"></p>
+    <button id="retry-log-detail" class="button hidden">重试</button>
+    <div id="log-detail-content"></div>
+  </dialog>
+  <dialog id="secret-dialog"><div class="dialog-head"><h2>请保存新密钥</h2><button id="close-secret" class="icon-button" aria-label="关闭">×</button></div><p>仅此一次展示。关闭后无法再次查看明文。</p><code id="new-secret"></code><div class="actions"><button id="copy-secret" class="button primary">复制密钥</button><button id="done-secret" class="button">完成</button></div></dialog>
+</body>
+</html>

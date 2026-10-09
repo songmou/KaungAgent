@@ -1,0 +1,20 @@
+use_default_settings: true
+
+general:
+  instance_name: "Kaung local search"
+
+search:
+  safe_search: 1
+  formats:
+    - html
+    - json
+
+server:
+  bind_address: "0.0.0.0"
+  port: 8080
+  secret_key: "kaung-local-loopback-only-4f2b347f173e4c46bfe426c69f864047"
+  limiter: false
+  image_proxy: false
+
+valkey:
+  url: valkey://valkey:6379/0
