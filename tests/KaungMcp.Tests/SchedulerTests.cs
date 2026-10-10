@@ -112,7 +112,7 @@ public sealed class SchedulerTests
         using var client = factory.CreateClient();
         var scheduler = factory.Services.GetRequiredService<SchedulerService>();
         await scheduler.TickAsync(default);
-        Assert.Equal(5, adapter.Calls);
+        Assert.Equal(8, adapter.Calls);
         await using var db = await factory.Services.GetRequiredService<IDbContextFactory<KaungMcpDbContext>>()
             .CreateDbContextAsync();
         Assert.Equal(3, await db.ScheduledTaskRuns.CountAsync());

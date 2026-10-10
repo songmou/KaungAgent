@@ -30,7 +30,7 @@ KaungAgent.sln
 - 按客户端、工具、结果和时间范围查询调用日志。
 - 调用日志预留 Token、计费单位和微单位成本字段。
 - 内置 `kaung_ping`、`kaung_echo`、`kaung_web_search`、`kaung_web_fetch` 工具，`kaung_connection_diagnostic` 提示词，以及 `kaung://server/status` 只读状态资源。
-- 珠宝行情模块提供七个 `kaung_jewelry_*` 工具：品种目录、国内外行情、品牌报价、历史、比较、单位/汇率换算和来源状态。当前启用上金所日行情及基准价、Gold API、周生生和六福；COMEX 和未验证品牌明确报告不可用，不用旧价或其他品种替代。配置、示例及尚未完成的验收项见 [珠宝行情 MCP](docs/jewelry-mcp.md)。
+- 珠宝行情模块对客户端提供六个纯数据工具：品种目录、国内外行情、品牌报价、历史、比较和单位/汇率换算。官网当日品牌品类缺失时，按顺序通过已验证网站补齐，覆盖 39 个大陆品牌/渠道名称。来源仅内部保存，来源状态工具仅供管理员测试；旧价不替代当日报价。配置和验收见 [珠宝行情 MCP](docs/jewelry-mcp.md)。
 - 数据库驱动的定时任务中心：在 KaungMcp 管理页创建固定周期或 Cron 任务，管理金价采集和已启用的 MCP 工具调用，查看每次运行及关联日志。使用说明见 [定时任务](docs/scheduler.md)。
 - 原生接入 SearXNG 网页搜索，并在 SearXNG 未配置、禁用或暂时不可用时直接抓取 Bing HTML 搜索结果作为尽力而为的托底；网页正文读取包含 robots.txt、SSRF、重定向和响应大小保护，并在静态 HTML 不可读时使用隔离 Chromium 渲染。
 - EF Core Migration、SQLite WAL 和数据库启动迁移。
@@ -242,7 +242,7 @@ KaungAgent 工作区数据库默认位于 `data/kaungagent.db`，Data Protection
 
 ## 当前边界
 
-- 仅面向 localhost 单用户使用，不包含登录和公网部署配置。
+- Agent 工作台面向 localhost 单用户；公网纯数据 MCP 提供 Linux 单实例部署模板，见 [公网部署](docs/public-mcp-deployment.md)，不开放管理页。
 - 模型协议为 OpenAI Chat Completions 兼容接口，暂不包含厂商专有协议和多模态附件。
 - MCP 客户端仅支持 HTTP；鉴权使用无鉴权或静态自定义请求头，暂不包含 OAuth 和 stdio。
 - 网页抓取只读取公开 HTTP/HTTPS 页面，不访问私网、登录页面、付费墙、PDF、媒体文件，也不执行递归站点爬取。

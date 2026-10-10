@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 namespace KaungMcp.Tests;
 
 public sealed class McpWebApplicationFactory(
-    Action<IServiceCollection>? configureTestServices = null) : WebApplicationFactory<KaungMcpApplicationMarker>
+    Action<IServiceCollection>? configureTestServices = null, bool jewelryOnly = false) : WebApplicationFactory<KaungMcpApplicationMarker>
 {
     public const string AdminKey = "test-admin-key-that-is-at-least-32-characters";
 
@@ -39,6 +39,7 @@ public sealed class McpWebApplicationFactory(
             configuration.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["AdminAuth:Key"] = AdminKey,
+                ["McpExposure:JewelryOnly"] = jewelryOnly.ToString(),
                 ["AllowedHosts"] = "*",
                 ["ConnectionStrings:KaungMcp"] = $"Data Source={DatabasePath};Default Timeout=30"
                 , ["McpManagement:SettingsPath"] = DatabasePath + ".settings.json"

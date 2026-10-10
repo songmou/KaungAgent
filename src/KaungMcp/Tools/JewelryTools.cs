@@ -15,49 +15,47 @@ namespace KaungMcp.Tools;
 public sealed class JewelryTools(JewelryService service)
 {
     [McpServerTool(Name = "kaung_jewelry_list_instruments", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Discover jewelry market/brand identifiers, planned categories and current source availability. futures_family is a directory placeholder, never a priced contract. Unavailable sources remain discoverable. Call this before querying IDs.")]
-    public async Task<JewelryCatalogResponse> ListAsync(CancellationToken cancellationToken = default) => new(
-        JewelryCatalog.Instruments,
-        await service.StatusAsync(cancellationToken),
-        "Categories describe query scope, not guaranteed source coverage. Only enabled verified adapters collect data. No real-time or seven-day stability guarantee.");
+    [Description("Discover supported market and mainland gold brand identifiers and categories. Call this before querying IDs; a listed category does not guarantee an available quote.")]
+    public Task<PublicJewelryCatalog> ListAsync(CancellationToken cancellationToken = default) =>
+        Task.FromResult(JewelryPublic.Catalog());
 
     [McpServerTool(Name = "kaung_jewelry_get_market_quotes", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Read SGE daily closes/benchmarks and provider XAU/USD quotes with provenance, timestamps and freshness. COMEX is unavailable until a concrete-contract source is validated. Reads cache; missing/expired caches trigger bounded collection with stale fallback. Never substitute yesterday for today, futures for spot, or collection time for source time.")]
-    public Task<JewelryQuoteResponse> MarketAsync(
+    [Description("Read domestic daily closes/benchmarks and international XAU/USD prices with quote dates and freshness. Missing/expired caches trigger collection. Prior-date prices never substitute for the requested date.")]
+    public async Task<PublicJewelryQuoteResponse> MarketAsync(
         [Description("Optional IDs from list_instruments; omitted or empty selects all markets.")] string[]? instrumentIds = null,
-        [Description("latest (default), today (Asia/Shanghai calendar date), or yyyy-MM-dd. Compared to each quote's sourceDate/dateBasis; global spot uses UTC source date.")] string date = "latest",
-        CancellationToken cancellationToken = default) => service.GetQuotesAsync(false, instrumentIds, date, null, "CN", cancellationToken);
+        [Description("latest (default), today (Asia/Shanghai calendar date), or yyyy-MM-dd. Compared to each quote's quoteDate; global spot uses UTC quote date.")] string date = "latest",
+        CancellationToken cancellationToken = default) => JewelryPublic.Quotes(await service.GetQuotesAsync(false, instrumentIds, date, null, "CN", cancellationToken));
 
     [McpServerTool(Name = "kaung_jewelry_get_brand_quotes", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Read mainland brand reference gold prices. Distinguishes jewelry, bars and recycling; includes fee/applicability caveats. Reports each missing source/date separately, with latestAvailable explicitly separate from the requested date. Not a final store transaction offer.")]
-    public Task<JewelryQuoteResponse> BrandsAsync(
-        [Description("Optional BRAND:* instrument IDs from list_instruments; omitted selects all eight brands.")] string[]? brandIds = null,
+    [Description("Read mainland brand reference gold prices. Distinguishes jewelry, bars and recycling; includes fee/applicability caveats. Reports each missing brand/date separately, with latestAvailable explicitly separate from the requested date. Not a final store transaction offer.")]
+    public async Task<PublicJewelryQuoteResponse> BrandsAsync(
+        [Description("Optional BRAND:* instrument IDs from list_instruments; omitted selects all supported brands.")] string[]? brandIds = null,
         [Description("latest, today (Asia/Shanghai), or yyyy-MM-dd.")] string date = "latest",
         [Description("Optional category: jewelry, bar, recycling. Omitted selects all available categories.")] string? category = null,
         [Description("Only CN (mainland China) is supported.")] string region = "CN",
-        CancellationToken cancellationToken = default) => service.GetQuotesAsync(true, brandIds, date, category, region, cancellationToken);
+        CancellationToken cancellationToken = default) => JewelryPublic.Quotes(await service.GetQuotesAsync(true, brandIds, date, category, region, cancellationToken));
 
     [McpServerTool(Name = "kaung_jewelry_get_price_history", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Query persisted observations with pagination. official_daily identifies official dated records; collected_snapshot identifies observed prices, never synthetic closing prices. No historical backfill, gap filling or complete archive guarantee. Unknown source dates can be found with collected_date.")]
-    public Task<JewelryHistoryResponse> HistoryAsync(
+    [Description("Query persisted observations with pagination. No historical backfill, gap filling or complete archive guarantee. Unknown quote dates can be found with collected_date.")]
+    public async Task<PublicJewelryHistory> HistoryAsync(
         [Description("Exact market or BRAND:* ID from list_instruments.")] string instrumentId,
         [Description("Inclusive yyyy-MM-dd.")] string startDate,
         [Description("Inclusive yyyy-MM-dd; maximum span 367 days.")] string endDate,
         [Description("source_date (default), or collected_date using UTC collection dates.")] string dateBasis = "source_date",
         [Description("Zero-based pagination offset.")] int offset = 0,
         [Description("Page size 1..500.")] int limit = 100,
-        CancellationToken cancellationToken = default) => service.HistoryAsync(instrumentId, startDate, endDate, dateBasis, offset, limit, cancellationToken);
+        CancellationToken cancellationToken = default) => JewelryPublic.History(await service.HistoryAsync(instrumentId, startDate, endDate, dateBasis, offset, limit, cancellationToken));
 
     [McpServerTool(Name = "kaung_jewelry_compare_prices", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
     [Description("Compare 2..20 stored quote IDs. rank requires matching known brand price/category/purity/fee/region/date basis. reference returns numerical differences from the first quote without ranking or margin interpretation. Both require same currency/unit and known matching dates. Never equate brand-vs-market differences with profit.")]
-    public Task<JewelryComparisonResponse> CompareAsync(
+    public async Task<PublicJewelryComparison> CompareAsync(
         [Description("Distinct quote.id values returned by quote or history tools.")] Guid[] quoteIds,
         [Description("rank (default) or reference; unknown purity/fees prevent rank.")] string mode = "rank",
-        CancellationToken cancellationToken = default) => service.CompareAsync(quoteIds, mode, cancellationToken);
+        CancellationToken cancellationToken = default) => JewelryPublic.Comparison(await service.CompareAsync(quoteIds, mode, cancellationToken));
 
     [McpServerTool(Name = "kaung_jewelry_convert_price", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
     [Description("Convert a positive price per gram/troy ounce and optionally currency using explicit caller-provided FX. Rate is TARGET currency per one SOURCE currency. Returns original input and formula; no fetched or implied exchange rate, no purity/tax/premium adjustment.")]
-    public JewelryConversion Convert(
+    public PublicJewelryConversion Convert(
         [Description("Positive price per fromUnit.")] decimal price,
         [Description("Uppercase three-letter source currency, e.g. USD.")] string fromCurrency,
         [Description("gram or troy_ounce (31.1034768 grams). Ordinary ounces are not supported.")] string fromUnit,
@@ -76,8 +74,10 @@ public sealed class JewelryTools(JewelryService service)
                 throw new McpException("exchangeRateTimestamp must be ISO-8601 with an explicit time-zone offset.");
             timestamp = parsed;
         }
-        return JewelryService.Convert(price, fromCurrency, fromUnit, toCurrency, toUnit, exchangeRate,
+        var converted = JewelryService.Convert(price, fromCurrency, fromUnit, toCurrency, toUnit, exchangeRate,
             exchangeRateSource, timestamp, decimals);
+        return new(converted.OriginalPrice, converted.FromCurrency, converted.FromUnit, converted.ConvertedPrice,
+            converted.ToCurrency, converted.ToUnit, converted.ExchangeRate, converted.ExchangeRateTimestamp, converted.Formula);
     }
 
     [McpServerTool(Name = "kaung_jewelry_get_source_status", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]

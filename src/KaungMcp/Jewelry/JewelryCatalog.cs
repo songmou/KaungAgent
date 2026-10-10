@@ -28,7 +28,15 @@ public static class JewelryCatalog
         new("chinagold", "中国黄金", "https://www.chinagoldgroup.com/", null,
             "pending", "2026-09-27: group homepage retrieved; retail quote scope and source still unverified.", 60, false),
         new("caibai", "菜百", "https://www.bjcaibai.com.cn/", null,
-            "pending", "2026-09-27: dynamic official homepage; dated price feed not validated.", 60, false)
+            "pending", "2026-09-27: dynamic official homepage; dated price feed not validated.", 60, false),
+        new("sojinjia", "搜金价品牌汇总", "https://www.sojinjia.cn/pinpai", "https://www.sojinjia.cn/pinpai",
+            "verified_sample", "2026-10-09: public mainland dated cards and robots allow verified; only gold rows parsed.", 60, true),
+        new("cngolddaily", "今日金价网品牌汇总", "https://cngolddaily.com/brands", "https://cngolddaily.com/brands",
+            "pending", "2026-10-09: HTTP 200; robots 404 permits access, but prices are calculated premiums without per-row dates. Not eligible for dated brand quotes.", 60, false),
+        new("zhenshepin", "珍奢品品牌汇总", "https://www.zhenshepin.com/pinpaijinjia/", "https://www.zhenshepin.com/pinpaijinjia/",
+            "verified_sample", "2026-10-09: public per-row dates, CNY/gram gold products and robots allow verified.", 60, true),
+        new("jxgjtz", "品牌金价汇总", "https://jin.jxgjtz.com/pinpaijinjia/", "https://jin.jxgjtz.com/pinpaijinjia/",
+            "verified_sample", "2026-10-09: public gold-only table columns, per-row mainland timestamps and robots allow verified.", 60, true)
     ];
 
     public static readonly JewelryInstrument[] Instruments =
@@ -39,7 +47,7 @@ public static class JewelryCatalog
         new("XAU/USD", "国际现货黄金（Gold API 报价）", "spot", "gold_api", "GLOBAL", ["market"]),
         // A family is discoverable, but never presented as a priced or continuous contract.
         new("COMEX:GC", "COMEX 黄金合约目录待接入", "futures_family", "cme", "US", ["market"]),
-        .. Sources.Where(s => s.MinimumIntervalMinutes == 60).Select(s => new JewelryInstrument(
-            "BRAND:" + s.Id, s.Name, "brand", s.Id, "CN", ["jewelry", "bar", "recycling"]))
+        .. JewelryBrands.All.Select(b => new JewelryInstrument(
+            b.InstrumentId, b.Name, "brand", b.Id, "CN", ["jewelry", "bar", "recycling"]))
     ];
 }

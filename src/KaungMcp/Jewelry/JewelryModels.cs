@@ -59,7 +59,7 @@ public sealed record JewelryHistoryResponse(string InstrumentId, string StartDat
 public sealed record JewelrySourceStatus(JewelrySourceDefinition Source, bool Enabled, string RuntimeStatus,
     DateTimeOffset? LastAttemptAt, DateTimeOffset? LastSuccessAt, DateTimeOffset? NextAttemptAt,
     int ConsecutiveFailures, string? LastError, int Attempts, int SuccessfulAttempts,
-    string ObservationStatus);
+    string ObservationStatus, DateOnly? LatestQuoteDate = null);
 public sealed record JewelryComparisonRow(Guid QuoteId, decimal Price, decimal Difference, decimal DifferencePercent);
 public sealed record JewelryComparisonResponse(string Mode, JewelryComparisonRow[] Rows,
     string[] Warnings, string Meaning);

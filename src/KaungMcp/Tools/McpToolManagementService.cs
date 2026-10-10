@@ -18,8 +18,15 @@ public sealed class McpToolManagementService(
     McpInvocationLogService invocationLogs,
     IServiceProvider services,
     IOptions<McpServerOptions> serverOptions,
-    ILoggerFactory loggerFactory)
+    ILoggerFactory loggerFactory,
+    IConfiguration configuration)
 {
+    public bool JewelryOnly => configuration.GetValue("McpExposure:JewelryOnly", false);
+    private bool ClientVisible(string name) => !InternalOnly.Contains(name) &&
+        (!JewelryOnly || name.StartsWith("kaung_jewelry_", StringComparison.Ordinal));
+
+    private static readonly HashSet<string> InternalOnly = new(StringComparer.Ordinal) { "kaung_jewelry_get_source_status" };
+
     private readonly IReadOnlyDictionary<string, McpServerTool> tools = registeredTools
         .ToDictionary(tool => tool.ProtocolTool.Name, StringComparer.Ordinal);
 
@@ -30,7 +37,7 @@ public sealed class McpToolManagementService(
             .ToDictionaryAsync(item => item.ToolName, item => item.IsEnabled, StringComparer.Ordinal, cancellationToken);
 
         var groups = tools.Values
-            .Select(tool => CreateCatalogItem(tool, settings.GetValueOrDefault(tool.ProtocolTool.Name, true)))
+            .Select(tool => CreateCatalogItem(tool, ClientVisible(tool.ProtocolTool.Name) && settings.GetValueOrDefault(tool.ProtocolTool.Name, true)))
             .GroupBy(item => item.Category.Id, StringComparer.Ordinal)
             .Select(group =>
             {
@@ -82,7 +89,7 @@ public sealed class McpToolManagementService(
 
     public async Task<bool> IsEnabledAsync(string name, CancellationToken cancellationToken)
     {
-        if (!tools.ContainsKey(name)) return false;
+        if (!ClientVisible(name) || !tools.ContainsKey(name)) return false;
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
         return await dbContext.ToolSettings.AsNoTracking()
             .Where(item => item.ToolName == name)
@@ -93,10 +100,12 @@ public sealed class McpToolManagementService(
     public async Task<HashSet<string>> GetDisabledNamesAsync(CancellationToken cancellationToken)
     {
         await using var dbContext = await dbContextFactory.CreateDbContextAsync(cancellationToken);
-        return await dbContext.ToolSettings.AsNoTracking()
+        var disabled = await dbContext.ToolSettings.AsNoTracking()
             .Where(item => !item.IsEnabled)
             .Select(item => item.ToolName)
             .ToHashSetAsync(StringComparer.Ordinal, cancellationToken);
+        disabled.UnionWith(tools.Keys.Where(name => !ClientVisible(name)));
+        return disabled;
     }
 
     public async Task<TestMcpToolResponse?> TestAsync(

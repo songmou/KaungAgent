@@ -12,6 +12,7 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
 using ModelContextProtocol.AspNetCore;
 using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 
 var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 if (!Directory.Exists(webRoot))
@@ -95,6 +96,17 @@ if (!builder.Environment.IsEnvironment("Testing"))
         }
     });
 }
+
+// Only a same-host reverse proxy may supply the original HTTPS scheme/client address.
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    options.KnownIPNetworks.Clear();
+    options.KnownProxies.Clear();
+    options.KnownProxies.Add(IPAddress.Loopback);
+    options.KnownProxies.Add(IPAddress.IPv6Loopback);
+    options.ForwardLimit = 1;
+});
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<ApiExceptionHandler>();
@@ -234,6 +246,7 @@ builder.Services.AddMcpServer()
 
 var app = builder.Build();
 
+app.UseForwardedHeaders();
 app.UseExceptionHandler();
 app.Use(async (context, next) =>
 {
@@ -308,6 +321,7 @@ if (args.Contains("--jewelry-probe", StringComparer.Ordinal))
 {
     var jewelry = app.Services.GetRequiredService<JewelryService>();
     await jewelry.CollectDueAsync(null, CancellationToken.None);
+    await jewelry.CollectBrandsAsync(false, CancellationToken.None);
     Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
     {
         sources = await jewelry.StatusAsync(CancellationToken.None),

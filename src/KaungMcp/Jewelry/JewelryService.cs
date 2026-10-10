@@ -10,7 +10,7 @@ using ModelContextProtocol;
 
 namespace KaungMcp.Jewelry;
 
-public sealed class JewelryService(
+public sealed partial class JewelryService(
     IDbContextFactory<KaungMcpDbContext> database,
     IJewelryAdapter adapter,
     IOptions<JewelryOptions> options,
@@ -56,7 +56,7 @@ public sealed class JewelryService(
     {
         await InitializeAsync(cancellationToken);
         var selected = sourceIds?.ToHashSet(StringComparer.Ordinal);
-        await Task.WhenAll(JewelryCatalog.Sources.Where(s => Enabled(s) && (selected is null || selected.Contains(s.Id)))
+        await Task.WhenAll(JewelryCatalog.Sources.Where(s => Enabled(s) && !JewelryBrands.IsFallback(s.Id) && (selected is null || selected.Contains(s.Id)))
             .Select(s => CollectAsync(s, false, false, cancellationToken)));
     }
 
@@ -75,7 +75,8 @@ public sealed class JewelryService(
     }
 
     private async Task<JewelryCollectionResult> CollectAsync(JewelrySourceDefinition source,
-        bool scheduled, bool force, CancellationToken cancellationToken)
+        bool scheduled, bool force, CancellationToken cancellationToken,
+        Func<JewelryQuote, bool>? adopt = null, bool respectInterval = false)
     {
         var gate = _sourceLocks.GetOrAdd(source.Id, _ => new SemaphoreSlim(1));
         await gate.WaitAsync(cancellationToken);
@@ -84,6 +85,9 @@ public sealed class JewelryService(
             await using var db = await database.CreateDbContextAsync(cancellationToken);
             var state = await db.JewelryCollectionStates.SingleAsync(s => s.SourceId == source.Id, cancellationToken);
             var now = clock.GetUtcNow();
+            if (!force && respectInterval && state.LastAttemptTicks is long last &&
+                now.UtcTicks - last < TimeSpan.FromMinutes(Interval(source)).Ticks)
+                return new JewelryCollectionResult(source.Id, "skipped", 0, "Source was already attempted in this collection interval.");
             if (!force && state.NextAttemptTicks > now.UtcTicks &&
                 (!scheduled || state.ConsecutiveFailures > 0))
                 return new JewelryCollectionResult(source.Id, "skipped", 0, "Source retry backoff is active.");
@@ -95,6 +99,7 @@ public sealed class JewelryService(
                 deadline.CancelAfter(TimeSpan.FromSeconds(Settings.TimeoutSeconds));
                 quotes = await adapter.CollectAsync(source, deadline.Token);
                 ValidateBatch(source.Id, quotes, now);
+                if (adopt is not null) quotes = quotes.Where(adopt).ToArray();
                 state.Status = quotes.Count == 0 ? "no_data" : "ok";
                 state.LastError = quotes.Count == 0 ? "Source returned no usable quotes; no zero or replacement price stored." : null;
                 state.ConsecutiveFailures = 0;
@@ -145,7 +150,8 @@ public sealed class JewelryService(
         var keys = new HashSet<string>(StringComparer.Ordinal);
         foreach (var quote in quotes)
         {
-            var instrument = JewelryCatalog.Instruments.SingleOrDefault(i => i.Id == quote.InstrumentId && i.SourceId == sourceId);
+            var instrument = JewelryCatalog.Instruments.SingleOrDefault(i => i.Id == quote.InstrumentId &&
+                (i.Kind == "brand" ? JewelryBrands.Supports(i.Id, sourceId) : i.SourceId == sourceId));
             if (instrument is null || quote.SourceId != sourceId || instrument.Kind != quote.Kind ||
                 instrument.Region != quote.Region || !instrument.Categories.Contains(quote.Category))
                 throw new FormatException("Quote identity does not match the source catalog.");
@@ -172,11 +178,12 @@ public sealed class JewelryService(
         var instruments = SelectInstruments(brands, ids);
         await InitializeAsync(cancellationToken);
         await using var db = await database.CreateDbContextAsync(cancellationToken);
-        var selectedSources = instruments.Select(i => i.SourceId).Distinct().ToArray();
+        var selectedSources = brands ? JewelryBrands.CollectionSources : instruments.Select(i => i.SourceId).Distinct().ToArray();
         // The persisted next-attempt time is the cache TTL. Fresh caches do not access the network;
         // expired caches receive a bounded refresh, and failed refreshes preserve prior observations.
         if (serviceProvider?.GetService(typeof(SchedulerService)) is SchedulerService scheduler)
             await scheduler.CollectOnQueryAsync(selectedSources, cancellationToken);
+        else if (brands) await CollectBrandsAsync(false, cancellationToken);
         else await CollectDueAsync(selectedSources, cancellationToken);
         var schedules = serviceProvider?.GetService(typeof(SchedulerService)) is SchedulerService scheduleService
             ? await scheduleService.JewelrySchedulesAsync(cancellationToken)
@@ -188,24 +195,34 @@ public sealed class JewelryService(
         var states = await db.JewelryCollectionStates.AsNoTracking().ToDictionaryAsync(s => s.SourceId, cancellationToken);
         JewelryQuoteView[] Views(IEnumerable<JewelryQuoteEntity> entities, string id) => entities
             .Where(e => e.InstrumentId == id).Select(Decode).Where(q => category is null || q.Category == category)
+            .GroupBy(q => brands ? q.Category : q.SeriesKey).SelectMany(g => brands ? SelectPreferred(g) : g)
             .OrderBy(q => q.Category).ThenBy(q => q.PriceType)
             .Select(q => View(q, schedules.GetValueOrDefault(q.SourceId))).ToArray();
         var items = instruments.Select(i =>
         {
             var values = Views(target, i.Id);
             var recent = day is null ? [] : Views(latest, i.Id);
-            var source = JewelryCatalog.Sources.Single(s => s.Id == i.SourceId);
-            var state = states[i.SourceId];
-            var unscheduled = Enabled(source) && !schedules.ContainsKey(i.SourceId);
-            var cachedFallback = values.Length > 0 && (state.Status is "error" or "no_data" || !Enabled(source) || unscheduled);
-            var status = cachedFallback ? "cached_fallback" : values.Length > 0 ? "available" : !Enabled(source) ? "unavailable" : day is not null ? "date_missing" : "no_data";
-            var reason = cachedFallback ? "Returning stored observations; " +
-                (!Enabled(source) ? "source is disabled. " + source.Evidence : unscheduled ? "scheduled collection is disabled." : state.LastError) : values.Length > 0 ? null : !Enabled(source) ?
-                (source.AdapterAvailable && source.Verification == "verified_sample" ? "Source disabled by Jewelry configuration. " : "") + source.Evidence : state.LastError ??
-                (day is not null ? "No observed quote with this source date/category. LatestAvailable is not a substitute." : "No observed quote for this instrument/category.");
+            var source = JewelryCatalog.Sources.SingleOrDefault(s => s.Id == i.SourceId);
+            var sourceEnabled = brands ? JewelryCatalog.Sources.Any(s => Enabled(s) && JewelryBrands.Supports(i.Id, s.Id)) : source is not null && Enabled(source);
+            var state = source is not null ? states[source.Id] : new JewelryCollectionState();
+            var unscheduled = sourceEnabled && !(brands ? schedules.Keys.Any(JewelryBrands.CollectionSources.Contains) : schedules.ContainsKey(i.SourceId));
+            var cachedFallback = values.Length > 0 && (!sourceEnabled || unscheduled || values.All(v => v.CacheStale) || !brands && state.Status is "error" or "no_data");
+            var status = cachedFallback ? "cached_fallback" : values.Length > 0 ? "available" : !sourceEnabled ? "unavailable" : day is not null ? "date_missing" : "no_data";
+            var reason = values.Length > 0 ? cachedFallback ? "Returning stored observations." : null
+                : day is not null ? "当日未更新。" : "暂无报价。";
             return new JewelryQuoteItem(i.Id, status, values, recent, reason);
         }).ToArray();
         return new JewelryQuoteResponse(day ?? "latest", items);
+    }
+
+    private static IEnumerable<JewelryQuote> SelectPreferred(IEnumerable<JewelryQuote> quotes)
+    {
+        var rows = quotes.ToArray();
+        var date = rows.Max(q => q.SourceDate);
+        var current = rows.Where(q => q.SourceDate == date).ToArray();
+        var priority = current.Min(q => JewelryBrands.Priority(q.SourceId));
+        return current.Where(q => JewelryBrands.Priority(q.SourceId) == priority)
+            .GroupBy(JewelryBrands.Slot).Select(g => g.OrderByDescending(q => q.CollectedAt).First());
     }
 
     private static IQueryable<JewelryQuoteEntity> Latest(IQueryable<JewelryQuoteEntity> query,
@@ -248,6 +265,9 @@ public sealed class JewelryService(
             : new Dictionary<string, ScheduledTask>(StringComparer.Ordinal);
         await using var db = await database.CreateDbContextAsync(cancellationToken);
         var states = await db.JewelryCollectionStates.AsNoTracking().ToDictionaryAsync(s => s.SourceId, cancellationToken);
+        var latestDates = await db.JewelryQuotes.AsNoTracking().GroupBy(q => q.SourceId)
+            .Select(g => new { SourceId = g.Key, Date = g.Max(q => q.SourceDate) })
+            .ToDictionaryAsync(q => q.SourceId, q => q.Date, cancellationToken);
         var cutoff = clock.GetUtcNow().AddDays(-7).UtcTicks;
         var attempts = await db.JewelryCollectionAttempts.AsNoTracking().Where(a => a.StartedTicks >= cutoff).ToListAsync(cancellationToken);
         return JewelryCatalog.Sources.Select(source =>
@@ -261,7 +281,8 @@ public sealed class JewelryService(
                 Timestamp(state.LastAttemptTicks), Timestamp(state.LastSuccessTicks), Timestamp(next),
                 state.ConsecutiveFailures, state.LastError, records.Length, records.Count(a => a.Success),
                 records.Select(a => new DateTime(a.StartedTicks, DateTimeKind.Utc).Date).Distinct().Count() >= 7
-                    ? "seven_calendar_dates_recorded_review_required" : "seven_day_observation_pending");
+                    ? "seven_calendar_dates_recorded_review_required" : "seven_day_observation_pending",
+                latestDates.GetValueOrDefault(source.Id) is string date ? DateOnly.ParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture) : null);
         }).ToArray();
     }
 
@@ -301,7 +322,7 @@ public sealed class JewelryService(
         var warnings = new List<string>();
         if (quotes.Select(q => q.DateBasis).Distinct().Count() > 1) warnings.Add("Date bases differ (e.g. exchange trade date vs brand effective date); numerical reference only.");
         if (quotes.Any(q => View(q).DataState != "current")) warnings.Add("Some quotes are older, date-only, or stale. See quote timestamps; this is not a live ranking.");
-        if (quotes.Select(q => q.SourceTimestamp).Distinct().Count() > 1) warnings.Add("Source timestamps are not synchronized; same date does not mean same moment.");
+        if (quotes.Select(q => q.SourceTimestamp).Distinct().Count() > 1) warnings.Add("Quote timestamps are not synchronized; same date does not mean same moment.");
         return new JewelryComparisonResponse(mode, quotes.Select(q => new JewelryComparisonRow(q.Id, q.Price,
             q.Price - first.Price, decimal.Round((q.Price / first.Price - 1) * 100, 4, MidpointRounding.AwayFromZero))).ToArray(),
             warnings.ToArray(), mode == "rank" ? "Ascending comparable brand reference prices; differences from the lowest price, not transaction offers."

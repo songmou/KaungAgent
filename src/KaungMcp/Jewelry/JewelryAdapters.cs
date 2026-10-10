@@ -64,6 +64,7 @@ public static class JewelryParsers
         "chowsangsang" => ChowSangSang(text, url),
         "chowtaifook" => ChowTaiFook(text, url),
         "lukfook" => Lukfook(text, url),
+        "sojinjia" or "zhenshepin" or "jxgjtz" => BrandFallbackParsers.Parse(sourceId, text, url),
         _ => throw new FormatException("Unsupported source parser.")
     };
 

@@ -17,6 +17,10 @@ public sealed class SchedulerService(
     TimeProvider clock,
     ILogger<SchedulerService> logger)
 {
+    public const string BrandHandler = "jewelry.collect_brands";
+    private static string[] TaskSources(ScheduledTask t) => t.Target == BrandHandler ? JewelryBrands.CollectionSources
+        : ParseArguments(t.ArgumentsJson).GetProperty("sourceIds").EnumerateArray().Select(x => x.GetString()!).ToArray();
+
     private readonly SemaphoreSlim initialization = new(1, 1);
     private readonly SemaphoreSlim parallelism = new(4, 4);
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> taskLocks = new();
@@ -48,6 +52,12 @@ public sealed class SchedulerService(
             foreach (var task in existing.Where(x => x.IsEnabled && !x.IsArchived &&
                 (x.NextRunTicks is null || x.NextRunTicks <= now.UtcTicks)))
                 task.NextRunTicks = Next(task, now).UtcTicks;
+            foreach (var task in existing.Where(CanMigrateBrandSeed))
+            {
+                task.Target = BrandHandler;
+                task.ArgumentsJson = "{}";
+                task.UpdatedTicks = now.UtcTicks;
+            }
             var defaults = new[]
             {
                 (Guid.Parse("a47d7911-c216-4f06-a5b6-19919f072101"), "国际金价采集", new[] { "gold_api" }, jewelryOptions.Value.MarketIntervalMinutes),
@@ -66,8 +76,8 @@ public sealed class SchedulerService(
                 db.ScheduledTasks.Add(new ScheduledTask
                 {
                     Id = id, Name = name, ExecutionType = "internal_handler",
-                    Target = "jewelry.collect_sources",
-                    ArgumentsJson = JsonSerializer.Serialize(new { sourceIds }, Json),
+                    Target = name == "品牌金价采集" ? BrandHandler : "jewelry.collect_sources",
+                    ArgumentsJson = name == "品牌金价采集" ? "{}" : JsonSerializer.Serialize(new { sourceIds }, Json),
                     ScheduleType = "interval", IntervalMinutes = minutes,
                     TimeZoneId = "Asia/Shanghai", IsEnabled = jewelryOptions.Value.BackgroundCollection,
                     NextRunTicks = jewelryOptions.Value.BackgroundCollection ? next.UtcTicks : null,
@@ -79,6 +89,14 @@ public sealed class SchedulerService(
         }
         finally { initialization.Release(); }
     }
+
+    public static bool CanMigrateBrandSeed(ScheduledTask task) =>
+        task.Id == Guid.Parse("a47d7911-c216-4f06-a5b6-19919f072103") &&
+        task.Name == "品牌金价采集" && task.Description is null && task.IsEnabled && !task.IsArchived &&
+        task.CreatedTicks == task.UpdatedTicks && task.ExecutionType == "internal_handler" &&
+        task.Target == "jewelry.collect_sources" && task.ScheduleType == "interval" &&
+        task.IntervalMinutes == 60 && task.CronExpression is null && task.TimeZoneId == "Asia/Shanghai" &&
+        TaskSources(task).SequenceEqual(new[] { "chowsangsang", "lukfook" });
 
     public static DateTimeOffset Next(ScheduledTask task, DateTimeOffset from)
     {
@@ -127,7 +145,8 @@ public sealed class SchedulerService(
             .Select(x => (object)new { x.Name, x.Title, x.Description, x.InputSchema, x.IsEnabled,
                 x.ReadOnly, x.Destructive, x.RequiresRiskConfirmation }).ToArray();
         return new SchedulerCatalog(
-            [new { id = "jewelry.collect_sources", name = "抓取金价来源", parameterSchema = new { sourceIds = "string[]" } }],
+            [new { id = "jewelry.collect_sources", name = "抓取金价来源", parameterSchema = (object)new { sourceIds = "string[]" } },
+             new { id = BrandHandler, name = "品牌金价补齐（官方优先）", parameterSchema = (object)new { } }],
             JewelryCatalog.Sources.Select(x => (object)new { x.Id, x.Name, enabled = jewelry.Enabled(x),
                 x.Verification, x.Evidence, x.MinimumIntervalMinutes }).ToArray(), tools,
             ["Asia/Shanghai", "UTC", "America/New_York", "Europe/London"]);
@@ -138,17 +157,30 @@ public sealed class SchedulerService(
     {
         if (change.ExecutionType == "internal_handler")
         {
-            if (change.Target != "jewelry.collect_sources") throw new ArgumentException("未知内部任务类型。");
-            if (!change.Arguments.TryGetProperty("sourceIds", out var ids) || ids.ValueKind != JsonValueKind.Array)
-                throw new ArgumentException("请选择金价来源。");
-            var selected = ids.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : "").ToArray();
-            if (selected.Length == 0 || selected.Any(string.IsNullOrWhiteSpace) ||
-                selected.Distinct(StringComparer.Ordinal).Count() != selected.Length)
-                throw new ArgumentException("请选择至少一个不重复的金价来源。");
+            if (change.Target is not ("jewelry.collect_sources" or BrandHandler)) throw new ArgumentException("未知内部任务类型。");
             var jewelry = services.GetRequiredService<JewelryService>();
+            string[] selected;
+            if (change.Target == BrandHandler)
+            {
+                if (change.Arguments.ValueKind != JsonValueKind.Object || change.Arguments.EnumerateObject().Any())
+                    throw new ArgumentException("品牌补齐任务不接受来源参数。");
+                selected = JewelryBrands.CollectionSources;
+                ValidateMinimumInterval(change, 60);
+            }
+            else
+            {
+                if (!change.Arguments.TryGetProperty("sourceIds", out var ids) || ids.ValueKind != JsonValueKind.Array)
+                    throw new ArgumentException("请选择金价来源。");
+                selected = ids.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? x.GetString() ?? "" : "").ToArray();
+                if (selected.Length == 0 || selected.Any(string.IsNullOrWhiteSpace) ||
+                    selected.Distinct(StringComparer.Ordinal).Count() != selected.Length)
+                    throw new ArgumentException("请选择至少一个不重复的金价来源。");
+                if (selected.Any(JewelryBrands.IsFallback)) throw new ArgumentException("第三方品牌来源请使用品牌金价补齐任务。");
+            }
             foreach (var id in selected)
             {
                 var source = JewelryCatalog.Sources.SingleOrDefault(x => x.Id == id);
+                if (change.Target == BrandHandler && source is not null && !jewelry.Enabled(source)) continue;
                 if (source is null || !jewelry.Enabled(source))
                     throw new ArgumentException($"来源 {id} 尚未验证或已停用，不能加入采集任务。");
                 var schedule = new ScheduledTask { ScheduleType = change.ScheduleType,
@@ -167,11 +199,10 @@ public sealed class SchedulerService(
             {
                 await using var db = await database.CreateDbContextAsync(ct);
                 var others = await db.ScheduledTasks.AsNoTracking().Where(x => x.IsEnabled && !x.IsArchived &&
-                    x.ExecutionType == "internal_handler" && x.Target == change.Target && x.Id != existingId).ToListAsync(ct);
+                    x.ExecutionType == "internal_handler" && (x.Target == "jewelry.collect_sources" || x.Target == BrandHandler) && x.Id != existingId).ToListAsync(ct);
                 foreach (var other in others)
                 {
-                    var otherIds = ParseArguments(other.ArgumentsJson).GetProperty("sourceIds")
-                        .EnumerateArray().Select(x => x.GetString()).ToHashSet();
+                    var otherIds = TaskSources(other).ToHashSet();
                     if (selected.Any(otherIds.Contains)) throw new ArgumentException("已启用的金价任务不能重复配置相同来源。");
                 }
             }
@@ -187,6 +218,20 @@ public sealed class SchedulerService(
         if (tool.RequiresRiskConfirmation && !change.ConfirmRisk)
             throw new ArgumentException("此 MCP 工具可能修改状态，需要明确确认无人值守执行风险。");
         return (snapshot, tool.RequiresRiskConfirmation);
+    }
+
+    private void ValidateMinimumInterval(ScheduledTaskChange change, int minimum)
+    {
+        var task = new ScheduledTask { ScheduleType = change.ScheduleType, IntervalMinutes = change.IntervalMinutes,
+            CronExpression = change.CronExpression, TimeZoneId = change.TimeZoneId ?? "Asia/Shanghai" };
+        var point = clock.GetUtcNow();
+        for (var i = 0; i < 100; i++)
+        {
+            var next = Next(task, point);
+            if (i > 0 && next - point < TimeSpan.FromMinutes(minimum))
+                throw new ArgumentException($"品牌补齐调度间隔不能短于 {minimum} 分钟。");
+            point = next;
+        }
     }
 
     public async Task<ScheduledTaskView> CreateAsync(ScheduledTaskChange change, CancellationToken ct)
@@ -336,16 +381,17 @@ public sealed class SchedulerService(
         var now = clock.GetUtcNow().UtcTicks;
         var selected = sourceIds.ToHashSet(StringComparer.Ordinal);
         var tasks = await db.ScheduledTasks.AsNoTracking().Where(x => x.IsEnabled && !x.IsArchived &&
-            x.ExecutionType == "internal_handler" && x.Target == "jewelry.collect_sources").ToListAsync(ct);
+            x.ExecutionType == "internal_handler" && (x.Target == "jewelry.collect_sources" || x.Target == BrandHandler)).ToListAsync(ct);
         foreach (var task in tasks)
         {
-            var ids = ParseArguments(task.ArgumentsJson).GetProperty("sourceIds").EnumerateArray()
-                .Select(x => x.GetString()!).ToArray();
+            var ids = TaskSources(task);
             if (!ids.Any(id => selected.Contains(id!))) continue;
             var relevant = ids.Where(selected.Contains).ToArray();
             var cached = await db.JewelryQuotes.AsNoTracking().Where(x => relevant.Contains(x.SourceId))
                 .Select(x => x.SourceId).Distinct().ToListAsync(ct);
-            var noCache = relevant.Any(id => !cached.Contains(id));
+            var noCache = task.Target == BrandHandler
+                ? !await db.JewelryQuotes.AsNoTracking().AnyAsync(q => q.InstrumentId.StartsWith("BRAND:"), ct)
+                : relevant.Any(id => !cached.Contains(id));
             if (noCache || task.NextRunTicks <= now)
                 await RunAsync(task.Id, "query_catchup", false, ct);
         }
@@ -356,11 +402,11 @@ public sealed class SchedulerService(
         await InitializeAsync(ct);
         await using var db = await database.CreateDbContextAsync(ct);
         var tasks = await db.ScheduledTasks.AsNoTracking().Where(x => x.IsEnabled && !x.IsArchived &&
-            x.ExecutionType == "internal_handler" && x.Target == "jewelry.collect_sources").ToListAsync(ct);
+            x.ExecutionType == "internal_handler" && (x.Target == "jewelry.collect_sources" || x.Target == BrandHandler)).ToListAsync(ct);
         var result = new Dictionary<string, ScheduledTask>(StringComparer.Ordinal);
         foreach (var task in tasks)
-            foreach (var id in ParseArguments(task.ArgumentsJson).GetProperty("sourceIds").EnumerateArray())
-                result[id.GetString()!] = task;
+            foreach (var id in TaskSources(task))
+                result[id] = task;
         return result;
     }
 
@@ -436,9 +482,9 @@ public sealed class SchedulerService(
     {
         if (task.ExecutionType == "internal_handler")
         {
-            var ids = ParseArguments(task.ArgumentsJson).GetProperty("sourceIds").EnumerateArray()
-                .Select(x => x.GetString()!).ToArray();
-            var results = await services.GetRequiredService<JewelryService>().CollectScheduledAsync(ids, force, ct);
+            var jewelry = services.GetRequiredService<JewelryService>();
+            var results = task.Target == BrandHandler ? await jewelry.CollectBrandsAsync(force, ct)
+                : await jewelry.CollectScheduledAsync(TaskSources(task), force, ct);
             var ok = results.Count(x => x.Status == "succeeded");
             var failed = results.Count(x => x.Status == "failed");
             var status = failed == 0 ? ok == 0 ? "skipped" : "succeeded" : ok == 0 ? "failed" : "partial";

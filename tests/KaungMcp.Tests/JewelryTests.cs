@@ -180,7 +180,7 @@ public sealed class JewelryTests
         Assert.Equal("ok", sources.Single(s => s.Source.Id == "lukfook").RuntimeStatus);
         var cached = await service.GetQuotesAsync(false, ["XAU/USD"], "latest", null, "CN", default);
         Assert.Equal("cached_fallback", cached.Items[0].Status);
-        Assert.Contains("HTTP 429", cached.Items[0].Reason!, StringComparison.Ordinal);
+        Assert.DoesNotContain("HTTP 429", cached.Items[0].Reason!, StringComparison.Ordinal);
         Assert.Equal("stale_cache", Assert.Single(cached.Items[0].Quotes).DataState);
         before = adapter.Calls;
         await service.CollectDueAsync(["gold_api"], default);
@@ -307,14 +307,22 @@ public sealed class JewelryTests
             AdditionalHeaders = new Dictionary<string, string> { ["Authorization"] = "Bearer " + created.ApiKey }
         }, http, ownsHttpClient: true));
         var tools = (await mcp.ListToolsAsync()).Where(t => t.Name.StartsWith("kaung_jewelry_", StringComparison.Ordinal)).ToArray();
-        Assert.Equal(7, tools.Length);
+        Assert.Equal(6, tools.Length);
+        Assert.DoesNotContain(tools, t => t.Name == "kaung_jewelry_get_source_status");
         Assert.All(tools, t => Assert.NotNull(t.ProtocolTool.OutputSchema));
-        foreach (var name in new[] { "list_instruments", "get_source_status", "get_market_quotes", "get_brand_quotes" })
+        foreach (var name in new[] { "list_instruments", "get_market_quotes", "get_brand_quotes" })
         {
             var result = await mcp.CallToolAsync("kaung_jewelry_" + name, new Dictionary<string, object?>());
             Assert.NotEqual(true, result.IsError);
             Assert.NotNull(result.StructuredContent);
+            var json = result.StructuredContent.Value.GetRawText();
+            Assert.DoesNotContain("sourceId", json);
+            Assert.DoesNotContain("sourceUrl", json);
+            Assert.DoesNotContain("https://", json);
+            Assert.DoesNotContain("Gold API", json);
         }
+        var blocked = await mcp.CallToolAsync("kaung_jewelry_get_source_status", new Dictionary<string, object?>());
+        Assert.True(blocked.IsError);
         var conversion = await mcp.CallToolAsync("kaung_jewelry_convert_price", new Dictionary<string, object?>
         {
             ["price"] = 3110.34768m, ["fromCurrency"] = "USD", ["fromUnit"] = "troy_ounce",
