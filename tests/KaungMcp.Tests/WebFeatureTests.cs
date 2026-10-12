@@ -307,7 +307,7 @@ public sealed class WebFeatureTests
             Assert.IsType<ModelContextProtocol.Protocol.TextContentBlock>(invalidFetch.Content[0]).Text,
             StringComparison.Ordinal);
 
-        var health = await adminClient.GetAsync("/health/web");
+        var health = await adminClient.GetAsync("/health/plugins");
         health.EnsureSuccessStatusCode();
 
         var logs = await McpWebApplicationFactory.WaitForLogsAsync(adminClient, created.Id, items =>

@@ -1,15 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
   <ItemGroup>
+    <ProjectReference Include="../KaungMcp.Foundation/KaungMcp.Foundation.csproj" />
     <PackageReference Include="Cronos" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
       <PrivateAssets>all</PrivateAssets>
-      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
     </PackageReference>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
-    <PackageReference Include="Microsoft.Playwright" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
-    <PackageReference Include="ReverseMarkdown" />
-    <PackageReference Include="Robots.Txt.Parser" />
-    <PackageReference Include="SmartReader" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../KaungMcp.Plugins.Diagnostics/KaungMcp.Plugins.Diagnostics.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="../KaungMcp.Web/KaungMcp.Web.csproj" />
+    <ProjectReference Include="../KaungMcp.Plugins.Jewelry/KaungMcp.Plugins.Jewelry.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 </Project>

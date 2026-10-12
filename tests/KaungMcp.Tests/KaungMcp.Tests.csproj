@@ -14,8 +14,14 @@
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../../src/KaungMcp/KaungMcp.csproj" />
+    <ProjectReference Include="../../src/KaungMcp.Web/KaungMcp.Web.csproj" />
+    <ProjectReference Include="../../src/KaungMcp.Plugins.Jewelry/KaungMcp.Plugins.Jewelry.csproj" />
+    <ProjectReference Include="../../src/KaungMcp.Plugins.Diagnostics/KaungMcp.Plugins.Diagnostics.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="Fixtures/Jewelry/**/*" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../templates/KaungMcp.Plugin.Sample/KaungMcp.Plugin.Sample.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 </Project>

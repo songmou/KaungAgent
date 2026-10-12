@@ -1,11 +1,14 @@
 using KaungMcp.Api;
+using KaungMcp.Capabilities;
 using KaungMcp.Clients;
 using KaungMcp.Configuration;
 using KaungMcp.Data;
 using KaungMcp.InvocationLogs;
 using KaungMcp.Security;
 using KaungMcp.Web;
-using KaungMcp.Jewelry;
+using KaungMcp.Plugins;
+using KaungMcp.Plugin;
+using KaungMcp.Foundation;
 using KaungMcp.Scheduling;
 using KaungMcp.Tools;
 using Microsoft.AspNetCore.Authentication;
@@ -15,7 +18,7 @@ using System.Net;
 using Microsoft.AspNetCore.HttpOverrides;
 
 var webRoot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
-if (!Directory.Exists(webRoot))
+if (!File.Exists(Path.Combine(webRoot, "admin", "index.html")))
 {
     var directory = new DirectoryInfo(Directory.GetCurrentDirectory());
     while (directory is not null)
@@ -57,6 +60,7 @@ builder.Configuration["SearXngLauncher:Port"] = Environment.GetEnvironmentVariab
 builder.Configuration["SearXngLauncher:ExternalEndpoint"] = searXngEndpoint ?? "";
 
 var baseSettings = ManagedSettingsStore.CaptureBaseline(builder.Configuration);
+var originalConfiguration = new ConfigurationBuilder().AddInMemoryCollection(builder.Configuration.AsEnumerable()).Build();
 var savedSettings = ManagedSettingsStore.Read(ManagedSettingsStore.ResolvePath(builder.Configuration));
 if (args.Contains("--sync-admin-bootstrap", StringComparer.Ordinal))
 {
@@ -67,8 +71,14 @@ if (args.Contains("--sync-admin-bootstrap", StringComparer.Ordinal))
     return;
 }
 var composedSettings = ManagedSettingsStore.Compose(baseSettings, savedSettings.Overrides);
+builder.Configuration.AddInMemoryCollection(composedSettings.Select(item =>
+    new KeyValuePair<string, string?>(item.Key, item.Value)));
 if (args.Contains("--print-launch-settings", StringComparer.Ordinal))
 {
+    Console.WriteLine($"WEB_SEARCH_ENABLED={CapabilityRegistry.LaunchToolEnabled(builder.Configuration, "kaung_web_search", builder.Configuration.GetValue("WebTools:SearchEnabled", true)).ToString().ToLowerInvariant()}");
+    Console.WriteLine($"WEB_FETCH_ENABLED={CapabilityRegistry.LaunchToolEnabled(builder.Configuration, "kaung_web_fetch", builder.Configuration.GetValue("WebTools:FetchEnabled", true)).ToString().ToLowerInvariant()}");
+    Console.WriteLine($"WEB_BROWSER_ENABLED={bool.Parse(composedSettings["WebFetch:BrowserFallbackEnabled"]).ToString().ToLowerInvariant()}");
+    Console.WriteLine($"SEARXNG_SEARCH_ENABLED={bool.Parse(composedSettings["WebSearch:SearXng:Enabled"]).ToString().ToLowerInvariant()}");
     Console.WriteLine($"MCP_LOCAL_PORT={composedSettings["McpHost:LocalPort"]}");
     Console.WriteLine($"SEARXNG_MODE={composedSettings["SearXngLauncher:Mode"]}");
     Console.WriteLine($"SEARXNG_PORT={composedSettings["SearXngLauncher:Port"]}");
@@ -76,10 +86,8 @@ if (args.Contains("--print-launch-settings", StringComparer.Ordinal))
     Console.WriteLine($"SEARXNG_PORT_MANAGED={savedSettings.Overrides.ContainsKey("SearXngLauncher:Port").ToString().ToLowerInvariant()}");
     return;
 }
-builder.Configuration.AddInMemoryCollection(composedSettings.Select(item =>
-    new KeyValuePair<string, string?>(item.Key, item.Value)));
 builder.Services.AddSingleton(services => new ManagedSettingsStore(
-    services.GetRequiredService<IConfiguration>(), baseSettings));
+    services.GetRequiredService<IConfiguration>(), baseSettings, originalConfiguration));
 if (!builder.Environment.IsEnvironment("Testing"))
 {
     var localPort = builder.Configuration.GetValue("McpHost:LocalPort", 5091);
@@ -120,7 +128,7 @@ builder.Services.AddDbContextFactory<KaungMcpDbContext>((services, options) =>
 {
     var configuration = services.GetRequiredService<IConfiguration>();
     var configuredConnectionString = configuration.GetConnectionString("KaungMcp")
-        ?? "Data Source=data/kaungmcp.db;Cache=Shared;Default Timeout=30";
+        ?? "Data Source=data/host.db;Cache=Shared;Default Timeout=30";
     options.UseSqlite(configuredConnectionString);
 });
 builder.Services.AddScoped<IApiKeyValidator, ApiKeyValidator>();
@@ -129,94 +137,16 @@ builder.Services.AddScoped<McpInvocationLogService>();
 builder.Services.AddScoped<McpToolManagementService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
-builder.Services.AddOptions<JewelryOptions>().Bind(builder.Configuration.GetSection("Jewelry"))
-    .Validate(o => o.MarketIntervalMinutes is >= 15 and <= 1440 && o.BrandIntervalMinutes is >= 60 and <= 1440,
-        "Jewelry intervals must be 15..1440 minutes for markets and 60..1440 for brands.")
-    .Validate(o => o.TimeoutSeconds is >= 1 and <= 60, "Jewelry timeout must be 1..60 seconds.")
-    .Validate(o => o.Sources.Keys.All(id => JewelryCatalog.Sources.Any(s => s.Id == id)), "Unknown Jewelry source ID.")
-    .ValidateOnStart();
-builder.Services.AddSingleton<IJewelryAdapter, JewelryAdapter>();
-builder.Services.AddSingleton<JewelryService>();
+builder.Services.AddMcpFoundation(builder.Configuration);
+builder.Services.AddWebModule(builder.Configuration);
+var pluginRuntime = PluginRuntime.Discover(builder.Services, builder.Configuration);
+builder.Services.AddSingleton(pluginRuntime);
+builder.Services.AddSingleton<CapabilityRegistry>();
+builder.Services.AddSingleton<SettingsDefinitionService>();
 builder.Services.AddSingleton<SchedulerService>();
-if (!builder.Environment.IsEnvironment("Testing"))
-    builder.Services.AddHostedService<ScheduledTaskWorker>();
-builder.Services.AddOptions<WebSearchOptions>()
-    .Bind(builder.Configuration.GetSection(WebSearchOptions.SectionName))
-    .Validate(options => options.TimeoutSeconds is >= 1 and <= 60, "WebSearch timeout must be between 1 and 60 seconds.")
-    .Validate(options => Uri.TryCreate(options.SearXng.BaseUrl, UriKind.Absolute, out var uri) &&
-        uri.Scheme is "http" or "https", "The SearXNG base URL must be an absolute HTTP or HTTPS URL.")
-    .Validate(options => options.StaticFallback.TimeoutSeconds is >= 1 and <= 60,
-        "Static search timeout must be between 1 and 60 seconds.")
-    .Validate(options => options.StaticFallback.MaxResponseBytes is >= 65_536 and <= 5_242_880,
-        "Static search response limit is invalid.")
-    .Validate(options => Uri.TryCreate(options.StaticFallback.BaseUrl, UriKind.Absolute, out var uri) &&
-        uri.Scheme == Uri.UriSchemeHttps && string.IsNullOrEmpty(uri.UserInfo),
-        "The static search fallback URL must be an absolute HTTPS URL without user information.")
-    .Validate(options => !string.IsNullOrWhiteSpace(options.StaticFallback.UserAgent),
-        "Static search fallback user agent is required.")
-    .ValidateOnStart();
-builder.Services.AddOptions<WebFetchOptions>()
-    .Bind(builder.Configuration.GetSection(WebFetchOptions.SectionName))
-    .Validate(options => options.TimeoutSeconds is >= 1 and <= 60, "WebFetch timeout must be between 1 and 60 seconds.")
-    .Validate(options => options.MaxResponseBytes is >= 65_536 and <= 10_485_760, "WebFetch response limit is invalid.")
-    .Validate(options => options.MaxRedirects is >= 0 and <= 10, "WebFetch redirect limit is invalid.")
-    .Validate(options => !string.IsNullOrWhiteSpace(options.UserAgent), "WebFetch user agent is required.")
-    .ValidateOnStart();
-builder.Services.AddSingleton<IHostAddressResolver, DnsHostAddressResolver>();
-builder.Services.AddSingleton<PublicWebAddressPolicy>();
-builder.Services.AddSingleton<WebContentExtractor>();
-builder.Services.AddSingleton<ISafeHttpFetcher, SafeHttpFetcher>();
-builder.Services.AddSingleton<IRobotsPolicy, RobotsPolicy>();
-builder.Services.AddSingleton<IBrowserPageRenderer, PlaywrightPageRenderer>();
-builder.Services.AddSingleton<IWebPageService, WebPageService>();
-builder.Services.AddSingleton<SearXngSearchProvider>();
-builder.Services.AddSingleton<BingHtmlSearchProvider>();
-builder.Services.AddSingleton<FallbackWebSearchProvider>();
-builder.Services.AddSingleton<IWebSearchProvider>(services =>
-    services.GetRequiredService<FallbackWebSearchProvider>());
-builder.Services.AddSingleton<IWebSearchHealthService>(services =>
-    services.GetRequiredService<FallbackWebSearchProvider>());
-builder.Services.AddHttpClient("SearXng")
-    .ConfigureHttpClient((services, client) =>
-    {
-        var configured = services.GetRequiredService<ManagedSettingsStore>().SearchOptions;
-        client.Timeout = TimeSpan.FromSeconds(configured.TimeoutSeconds);
-    });
-builder.Services.AddHttpClient("StaticSearch")
-    .ConfigureHttpClient((services, client) =>
-    {
-        var configured = services.GetRequiredService<ManagedSettingsStore>().SearchOptions;
-        client.Timeout = TimeSpan.FromSeconds(configured.StaticFallback.TimeoutSeconds);
-        client.DefaultRequestHeaders.UserAgent.ParseAdd(configured.StaticFallback.UserAgent);
-        client.DefaultRequestHeaders.Accept.ParseAdd("text/html,application/xhtml+xml;q=0.9");
-    })
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
-    {
-        AllowAutoRedirect = true,
-        AutomaticDecompression = DecompressionMethods.All,
-        UseCookies = false
-    });
-builder.Services.AddHttpClient("WebFetch")
-    .ConfigureHttpClient((services, client) =>
-    {
-        var configured = services.GetRequiredService<ManagedSettingsStore>().FetchOptions;
-        client.Timeout = TimeSpan.FromSeconds(configured.TimeoutSeconds);
-    })
-    .ConfigurePrimaryHttpMessageHandler(services =>
-    {
-        var addressPolicy = services.GetRequiredService<PublicWebAddressPolicy>();
-        return new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            AutomaticDecompression = DecompressionMethods.All,
-            ConnectCallback = addressPolicy.ConnectAsync,
-            // A process-wide HTTP(S)_PROXY would make ConnectCallback validate the
-            // proxy endpoint rather than the requested origin, defeating DNS pinning.
-            UseProxy = false,
-            UseCookies = false,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2)
-        };
-    });
+builder.Services.AddSingleton<IPluginTaskService>(services => services.GetRequiredService<SchedulerService>());
+if (!builder.Environment.IsEnvironment("Testing")) builder.Services.AddHostedService<ScheduledTaskWorker>();
+builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(125));
 
 builder.Services
     .AddAuthentication()
@@ -235,16 +165,16 @@ builder.Services.AddAuthorization(options =>
         policy.AddAuthenticationSchemes(SecurityConstants.AdminScheme).RequireAuthenticatedUser());
 });
 
-builder.Services.AddMcpServer()
+var mcpBuilder = builder.Services.AddMcpServer()
     .WithHttpTransport(options => options.SessionMode = HttpServerSessionMode.Stateless)
     .AddAuthorizationFilters()
     .AddToolAvailability()
-    .AddInvocationLogging()
-    .WithToolsFromAssembly(typeof(Program).Assembly)
-    .WithPromptsFromAssembly(typeof(Program).Assembly)
-    .WithResourcesFromAssembly(typeof(Program).Assembly);
+    .AddInvocationLogging();
+pluginRuntime.RegisterMcp(mcpBuilder);
+mcpBuilder.WithToolsFromAssembly(typeof(WebModule).Assembly);
 
 var app = builder.Build();
+var activePlugins = app.Services.GetRequiredService<PluginRuntime>();
 
 app.UseForwardedHeaders();
 app.UseExceptionHandler();
@@ -277,30 +207,7 @@ app.MapGet("/health/ready", async (
         : Results.StatusCode(StatusCodes.Status503ServiceUnavailable);
 });
 
-app.MapGet("/health/web", async (
-    IWebSearchHealthService searchHealthService,
-    IBrowserPageRenderer browserRenderer,
-    CancellationToken cancellationToken) =>
-{
-    var searchHealth = await searchHealthService.GetHealthAsync(cancellationToken);
-    var chromiumAvailable = await browserRenderer.IsAvailableAsync(cancellationToken);
-    var healthy = searchHealth.Ready && chromiumAvailable;
-    return Results.Json(
-        new
-        {
-            status = healthy ? "ready" : "degraded",
-            components = new
-            {
-                webSearch = searchHealth.Ready ? "ready" : "unavailable",
-                searxng = searchHealth.SearXng,
-                staticSearchFallback = searchHealth.StaticFallback,
-                activeSearchProvider = searchHealth.ActiveProvider,
-                staticFetcher = "ready",
-                chromium = chromiumAvailable ? "ready" : "unavailable"
-            }
-        },
-        statusCode: healthy ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
-});
+app.MapGet("/health/plugins", () => Results.Json(new { status = activePlugins.Plugins.Any(p => p.IsEnabled && p.Status != "ready") ? "degraded" : "ready" }));
 
 app.MapGet("/", () => Results.Content("""
 <!doctype html>
@@ -315,22 +222,15 @@ app.MapAdminEndpoints();
 app.MapMcp("/mcp").RequireAuthorization(SecurityConstants.McpClientPolicy);
 
 var connectionString = app.Configuration.GetConnectionString("KaungMcp")
-    ?? "Data Source=data/kaungmcp.db;Cache=Shared;Default Timeout=30";
+    ?? "Data Source=data/host.db;Cache=Shared;Default Timeout=30";
 await DatabaseInitializer.InitializeAsync(app.Services, connectionString);
-if (args.Contains("--jewelry-probe", StringComparer.Ordinal))
+await activePlugins.InitializeAsync(app.Services, CancellationToken.None);
+await using (var scope = app.Services.CreateAsyncScope())
 {
-    var jewelry = app.Services.GetRequiredService<JewelryService>();
-    await jewelry.CollectDueAsync(null, CancellationToken.None);
-    await jewelry.CollectBrandsAsync(false, CancellationToken.None);
-    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(new
-    {
-        sources = await jewelry.StatusAsync(CancellationToken.None),
-        markets = await jewelry.GetQuotesAsync(false, null, "latest", null, "CN", CancellationToken.None),
-        brands = await jewelry.GetQuotesAsync(true, null, "latest", null, "CN", CancellationToken.None)
-    }, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web) { WriteIndented = true }));
-    await app.DisposeAsync();
-    return;
+    var db = await scope.ServiceProvider.GetRequiredService<IDbContextFactory<KaungMcpDbContext>>().CreateDbContextAsync();
+    await using (db) await app.Services.GetRequiredService<CapabilityRegistry>().InitializeAsync(db, CancellationToken.None);
 }
+await app.Services.GetRequiredService<SchedulerService>().InitializeAsync(CancellationToken.None);
 await app.RunAsync();
 
 public partial class Program;

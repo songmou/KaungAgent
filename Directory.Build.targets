@@ -1,0 +1,24 @@
+<Project>
+  <Target Name="CollectBundledPlugins">
+    <ItemGroup>
+      <BundledPluginFile Include="$(MSBuildThisFileDirectory)src/KaungMcp.Plugins.Diagnostics/bin/$(Configuration)/$(TargetFramework)/**/*">
+        <PluginId>diagnostics</PluginId>
+      </BundledPluginFile>
+      <BundledPluginFile Include="$(MSBuildThisFileDirectory)src/KaungMcp.Plugins.Jewelry/bin/$(Configuration)/$(TargetFramework)/**/*">
+        <PluginId>jewelry</PluginId>
+      </BundledPluginFile>
+    </ItemGroup>
+  </Target>
+  <Target Name="PackageBundledPlugins" AfterTargets="Build" DependsOnTargets="CollectBundledPlugins" Condition="'$(MSBuildProjectName)' == 'KaungMcp' Or '$(MSBuildProjectName)' == 'KaungMcp.Tests' Or '$(MSBuildProjectName)' == 'KaungAgent.Tests'">
+    <Copy SourceFiles="@(BundledPluginFile)" DestinationFiles="@(BundledPluginFile-&gt;'$(TargetDir)plugins/%(PluginId)/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PublishBundledPlugins" AfterTargets="Publish" DependsOnTargets="CollectBundledPlugins" Condition="'$(MSBuildProjectName)' == 'KaungMcp'">
+    <Copy SourceFiles="@(BundledPluginFile)" DestinationFiles="@(BundledPluginFile-&gt;'$(PublishDir)plugins/%(PluginId)/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+  <Target Name="PackageSamplePluginForTests" AfterTargets="Build" Condition="'$(MSBuildProjectName)' == 'KaungMcp.Tests'">
+    <ItemGroup>
+      <SamplePluginFile Include="$(MSBuildThisFileDirectory)templates/KaungMcp.Plugin.Sample/bin/$(Configuration)/$(TargetFramework)/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(SamplePluginFile)" DestinationFiles="@(SamplePluginFile-&gt;'$(TargetDir)plugin-fixtures/sample/%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+</Project>

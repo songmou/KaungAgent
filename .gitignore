@@ -8,7 +8,7 @@
 *.db
 *.db-shm
 *.db-wal
-data/
+/data/
 /.kaung/
 **/.kaung/
 TestResults/

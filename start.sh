@@ -12,7 +12,6 @@ readonly AGENT_URL="http://127.0.0.1:5090"
 readonly MCP_DLL="${SCRIPT_DIR}/src/KaungMcp/bin/Debug/net10.0/KaungMcp.dll"
 readonly AGENT_DLL="${SCRIPT_DIR}/src/KaungAgent/bin/Debug/net10.0/KaungAgent.dll"
 readonly MCP_RUNTIME_CONFIG="${SCRIPT_DIR}/src/KaungMcp/bin/Debug/net10.0/KaungMcp.runtimeconfig.json"
-readonly PLAYWRIGHT_DLL="${SCRIPT_DIR}/src/KaungMcp/bin/Debug/net10.0/Microsoft.Playwright.dll"
 readonly SEARXNG_COMPOSE_FILE="${SCRIPT_DIR}/infra/searxng/compose.yml"
 
 MCP_PID=""
@@ -155,6 +154,10 @@ load_managed_launch_settings() {
     while IFS= read -r line; do
         value="${line#*=}"
         case "$line" in
+            WEB_SEARCH_ENABLED=*) WEB_SEARCH_ENABLED="$value" ;;
+            WEB_FETCH_ENABLED=*) WEB_FETCH_ENABLED="$value" ;;
+            WEB_BROWSER_ENABLED=*) WEB_BROWSER_ENABLED="$value" ;;
+            SEARXNG_SEARCH_ENABLED=*) SEARXNG_SEARCH_ENABLED="$value" ;;
             MCP_LOCAL_PORT=*) MCP_LOCAL_PORT="$value" ;;
             SEARXNG_MODE=*) SEARXNG_MODE="$value" ;;
             SEARXNG_PORT=*) SEARXNG_PORT="$value" ;;
@@ -340,6 +343,20 @@ handle_signal() {
 trap cleanup EXIT
 trap handle_signal INT TERM HUP
 
+prepare_plugin_directory() {
+    Plugins__Directory="${Plugins__Directory:-${SCRIPT_DIR}/.kaung/plugins}"
+    [[ "$Plugins__Directory" == /* ]] || Plugins__Directory="${SCRIPT_DIR}/${Plugins__Directory}"
+    export Plugins__Directory
+    if [[ ! -d "$Plugins__Directory" ]]; then
+        mkdir -p "$Plugins__Directory"
+        local package
+        for package in "${SCRIPT_DIR}/src/KaungMcp/bin/Debug/net10.0/plugins/"*; do
+            [[ -d "$package" && "${package##*/}" != "web" ]] || continue
+            cp -R "$package" "$Plugins__Directory/"
+        done
+    fi
+}
+
 restore_and_build() {
     log "Restoring dependencies..."
     dotnet restore "$SOLUTION_FILE" --nologo
@@ -351,9 +368,10 @@ restore_and_build() {
 }
 
 install_chromium() {
-    [[ -f "$PLAYWRIGHT_DLL" && -f "$MCP_RUNTIME_CONFIG" ]] || fail "Playwright build output was not found."
+    local plugin_playwright_dll="${MCP_DLL%/*}/Microsoft.Playwright.dll"
+    [[ -f "$plugin_playwright_dll" && -f "$MCP_RUNTIME_CONFIG" ]] || fail "Playwright build output was not found."
     log "Ensuring the Playwright Chromium headless shell is installed..."
-    dotnet exec --runtimeconfig "$MCP_RUNTIME_CONFIG" "$PLAYWRIGHT_DLL" install --only-shell chromium \
+    dotnet exec --runtimeconfig "$MCP_RUNTIME_CONFIG" "$plugin_playwright_dll" install --only-shell chromium \
         || fail "Unable to install the Playwright Chromium headless shell."
 }
 
@@ -400,6 +418,12 @@ start_searxng() {
 
     if ! docker_compose_is_available; then
         log "Docker Compose is unavailable; continuing with the static HTML search fallback."
+        SEARXNG_DISABLED=1
+        return
+    fi
+
+    if ! docker info >/dev/null 2>&1; then
+        log "Docker engine is not running; continuing with the static HTML search fallback."
         SEARXNG_DISABLED=1
         return
     fi
@@ -608,8 +632,12 @@ verify_tool_discovery() {
         "${AGENT_URL}/api/mcp/tools")"; then
         fail "KaungAgent started, but MCP tool discovery failed. Run './start.sh --reconfigure' if the local database or client credentials changed."
     fi
-    [[ "$tools" == *'"kaung_web_search"'* && "$tools" == *'"kaung_web_fetch"'* ]] \
-        || fail "KaungAgent connected, but the web search and fetch tools were not discovered."
+    if [[ "${WEB_SEARCH_ENABLED:-true}" == "true" ]]; then
+        [[ "$tools" == *'"kaung_web_search"'* ]] || fail "The enabled web search tool was not discovered."
+    fi
+    if [[ "${WEB_FETCH_ENABLED:-true}" == "true" ]]; then
+        [[ "$tools" == *'"kaung_web_fetch"'* ]] || fail "The enabled web fetch tool was not discovered."
+    fi
     log "Verified the complete Agent-to-MCP connection."
 }
 
@@ -686,6 +714,7 @@ main() {
     fi
 
     restore_and_build
+    prepare_plugin_directory
     load_managed_launch_settings
     check_ports
     if [[ $RECONFIGURE -eq 1 ]]; then
@@ -693,9 +722,17 @@ main() {
         dotnet "$MCP_DLL" --sync-admin-bootstrap >/dev/null \
             || fail "Unable to synchronize the rotated administrator key."
     fi
-    install_chromium
-    start_searxng
-    wait_for_searxng
+    if [[ "${WEB_FETCH_ENABLED:-true}" == "true" && "${WEB_BROWSER_ENABLED:-true}" == "true" ]]; then
+        install_chromium
+    else
+        log "Web fetch or browser fallback disabled; Chromium preparation skipped."
+    fi
+    if [[ "${WEB_SEARCH_ENABLED:-true}" == "true" && "${SEARXNG_SEARCH_ENABLED:-true}" == "true" && "${SEARXNG_MODE}" == "local" ]]; then
+        start_searxng
+        wait_for_searxng
+    else
+        log "Local SearXNG not required; container preparation skipped."
+    fi
     create_response_file
     start_mcp
     wait_for_health KaungMcp "${MCP_URL}/health/ready" "$MCP_PID"

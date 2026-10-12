@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../KaungMcp.Plugin.Abstractions/KaungMcp.Plugin.Abstractions.csproj" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Robots.Txt.Parser" />
+  </ItemGroup>
+</Project>

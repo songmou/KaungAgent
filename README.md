@@ -8,7 +8,12 @@ KaungAgent 是一个基于 C#、.NET 10、Blazor 和 SQLite 的本地 Agent/MCP 
 KaungAgent.sln
 ├── src
 │   ├── KaungAgent       # Agent 平台入口和 MCP 客户端代理
-│   └── KaungMcp         # MCP HTTP 服务、鉴权、客户端管理和调用日志
+│   ├── KaungMcp                     # MCP 宿主、管理页面、统一调度
+│   ├── KaungMcp.Plugin.Abstractions # 插件契约
+│   ├── KaungMcp.Foundation          # 安全网络与通用基础服务
+│   ├── KaungMcp.Plugins.Diagnostics # 诊断插件
+│   ├── KaungMcp.Web                 # 宿主内置网页模块
+│   └── KaungMcp.Plugins.Jewelry     # 珠宝插件、独立数据库与采集任务
 └── tests
     ├── KaungAgent.Tests
     └── KaungMcp.Tests
@@ -18,7 +23,9 @@ KaungAgent.sln
 
 - KaungMcp 默认监听 `http://localhost:5091`，MCP 端点为 `/mcp`。
 - KaungAgent 默认监听 `http://localhost:5090`，通过 MCP Streamable HTTP 调用 KaungMcp。
-- KaungMcp 使用 SQLite 保存客户端身份、调用日志及请求响应详情。
+- KaungMcp 宿主使用 `data/host.db` 保存配置、客户端、权限、计划、运行与日志；插件数据位于 `data/plugins/{pluginId}`。
+- 采用可信进程内插件与宿主统一调度，安装/升级/卸载通过停止服务后调整目录并重启完成。契约、生命周期与开发模板见 [插件开发](docs/plugins.md)。
+- 本次按全新架构实现，不提供旧数据库和接口迁移。
 
 ## 已实现能力
 
@@ -29,9 +36,9 @@ KaungAgent.sln
 - 管理 API：创建、查询、启用、禁用、轮换和软删除客户端；按分类查看、启停和测试 MCP 工具。
 - 按客户端、工具、结果和时间范围查询调用日志。
 - 调用日志预留 Token、计费单位和微单位成本字段。
-- 内置 `kaung_ping`、`kaung_echo`、`kaung_web_search`、`kaung_web_fetch` 工具，`kaung_connection_diagnostic` 提示词，以及 `kaung://server/status` 只读状态资源。
-- 珠宝行情模块对客户端提供六个纯数据工具：品种目录、国内外行情、品牌报价、历史、比较和单位/汇率换算。官网当日品牌品类缺失时，按顺序通过已验证网站补齐，覆盖 39 个大陆品牌/渠道名称。来源仅内部保存，来源状态工具仅供管理员测试；旧价不替代当日报价。配置和验收见 [珠宝行情 MCP](docs/jewelry-mcp.md)。
-- 数据库驱动的定时任务中心：在 KaungMcp 管理页创建固定周期或 Cron 任务，管理金价采集和已启用的 MCP 工具调用，查看每次运行及关联日志。使用说明见 [定时任务](docs/scheduler.md)。
+- 诊断插件与内置网页模块提供 `kaung_ping`、`kaung_echo`、`kaung_web_search`、`kaung_web_fetch` 工具，`kaung_connection_diagnostic` 提示词，以及 `kaung://server/status` 只读状态资源。
+- 珠宝插件对客户端提供六个纯数据工具：品种目录、国内外行情、品牌报价、历史、比较和单位/汇率换算。官网当日品牌品类缺失时，按顺序通过已验证网站补齐，覆盖 39 个大陆品牌/渠道名称。来源仅内部保存，来源状态工具仅供管理员测试；旧价不替代当日报价。配置和验收见 [珠宝行情 MCP](docs/jewelry-mcp.md)。
+- 数据库驱动的定时任务中心：在 KaungMcp 管理页创建固定周期或 Cron 任务，管理插件后台任务与显式允许调度的 MCP 工具调用，查看每次运行及关联日志。使用说明见 [定时任务](docs/scheduler.md)。
 - 原生接入 SearXNG 网页搜索，并在 SearXNG 未配置、禁用或暂时不可用时直接抓取 Bing HTML 搜索结果作为尽力而为的托底；网页正文读取包含 robots.txt、SSRF、重定向和响应大小保护，并在静态 HTML 不可读时使用隔离 Chromium 渲染。
 - EF Core Migration、SQLite WAL 和数据库启动迁移。
 
@@ -76,7 +83,7 @@ dotnet test KaungAgent.sln
 
 首次启动不需要输入任何内容。脚本会自动生成 KaungMcp 管理员密钥和 KaungAgent API 密钥，随后自动还原和编译项目、启动 KaungMcp、创建本地 MCP 客户端，再启动 KaungAgent 并验证完整调用链。
 
-启动脚本还会启动默认仅绑定回环地址的本地 SearXNG，并安装与项目版本匹配的 Playwright Chromium headless shell。若默认端口 8080 已占用，脚本会自动在 8081–8099 中选择可用端口，不会停止或覆盖原有服务；也可以显式设置 `SEARXNG_PORT`。若已有独立 SearXNG，可在启动前设置 `SEARXNG_ENDPOINT`，此时脚本只检查该端点，不管理其生命周期。
+首次启动会将内置插件复制到 `.kaung/plugins`，后续启动不会恢复已移除插件。网页模块由宿主直接提供；网页搜索工具启用且配置为本地 SearXNG 时准备本地容器，网页读取工具启用且浏览器回退开启时安装与项目版本匹配的 Chromium headless shell。若默认端口 8080 已占用，脚本会自动在 8081–8099 中选择可用端口，不会停止或覆盖原有服务；也可以显式设置 `SEARXNG_PORT`。若已有独立 SearXNG，可在启动前设置 `SEARXNG_ENDPOINT`，此时宿主使用外部端点，脚本不管理其生命周期。
 
 不希望运行 SearXNG 时，可以直接启动静态搜索托底：
 
@@ -101,7 +108,11 @@ SEARXNG_DISABLED=1 ./start.sh
 
 KaungMcp 管理页使用 `.kaung/local.env` 中的 `KAUNG_MCP_ADMIN_KEY` 登录；验证后密钥仅保存在当前浏览器标签页的会话存储中。页面可以按分类查看工具名称、描述、参数 Schema 和行为提示，逐工具启停并使用表单或原始 JSON 测试调用；停用会立即阻止客户端发现和调用，但不影响管理员测试。页面也可以管理定时任务、MCP 客户端、调用日志，以及搜索、网页读取和服务设置。客户端密钥仅在创建或轮换时展示一次。对 `kaung-agent-local` 客户端轮换、停用或删除会中断 Agent 连接；轮换后需同步 `.kaung/local.env` 中的 `KAUNG_MCP_API_KEY` 并重启 Agent。下一次一键启动会检测失效的本地客户端密钥并重新配置客户端。
 
-页面保存的配置存放在权限为 `600` 的 `.kaung/mcp-settings.json`，按字段覆盖环境变量和 `appsettings.json`；使用“恢复”可清除单字段覆盖。网页搜索（包括 SearXNG 搜索开关及地址）和网页读取设置对后续请求立即生效。监听、数据库、日志级别和 SearXNG 容器启动方式需重启一键启动脚本后生效。切换数据库只接受已有、结构兼容的 SQLite 文件，不会复制原库的客户端和日志。
+管理导航分为概览、网页能力、插件管理、工具管理、定时任务、执行记录、客户端与密钥、系统设置。网页能力按搜索、网页读取、依赖服务分组；插件详情按概览、配置、工具、定时任务、执行记录组织。每项配置只在其所属页面编辑，显示当前值、配置来源和生效时机；“恢复来源”先计入未保存修改，再统一保存。公共网络请求超时、重定向、User-Agent 与 robots 缓存由系统设置维护，同时影响网页能力和珠宝采集。
+
+执行记录包含任务运行和调用日志两个标签，独立保留筛选与分页，支持归属、计划、状态、触发来源及时间筛选；详情展示名称、摘要、错误、参数、原始结果与产物，并可跳转关联记录。
+
+页面保存的配置存放在宿主数据库 `ManagedSettings` 表中，保存时数据库文件权限为 `600`，按字段覆盖环境变量和 `appsettings.json`；使用“恢复”可清除单字段覆盖。网页搜索（包括 SearXNG 搜索开关及地址）和网页读取设置对后续请求立即生效。监听、数据库、日志级别和 SearXNG 容器启动方式需重启一键启动脚本后生效。切换数据库只接受已有、结构兼容的 SQLite 文件，不会复制原库的客户端和日志。
 
 局域网访问默认关闭。启用后，在管理页填写本机的私有 IPv4 地址和 HTTPS 端口，应用会生成自签证书；重启后仅在该地址开放 HTTPS，本机 Agent 仍使用回环 HTTP。其他设备需要先信任管理页提供的公有证书，并核对页面显示的 SHA-256 指纹。不要将局域网监听地址设为公网地址。
 
@@ -139,7 +150,7 @@ export KAUNG_MCP_ADMIN_KEY="replace-with-a-random-admin-key-at-least-32-characte
 dotnet run --project src/KaungMcp
 ```
 
-服务首次启动时会自动创建 `data/kaungmcp.db` 并执行数据库迁移。
+服务首次启动时会自动创建 `data/host.db` 并执行数据库迁移。
 
 #### 2. 创建 MCP 客户端
 
@@ -198,12 +209,14 @@ curl http://localhost:5091/api/admin/call-logs \
 
 ### KaungMcp
 
+插件及调度完整接口见 [定时任务](docs/scheduler.md)，包括 `/plugins`、`/scheduled-tasks`、`/task-runs`。
+
 | 方法 | 路径 | 鉴权 | 说明 |
 | --- | --- | --- | --- |
 | POST | `/mcp` | `Authorization: Bearer ...` | MCP Streamable HTTP |
 | GET | `/health/live` | 无 | 进程存活检查 |
 | GET | `/health/ready` | 无 | SQLite 就绪检查 |
-| GET | `/health/web` | 无 | SearXNG、静态搜索托底、HTTP 抓取器和 Chromium 状态 |
+| GET | `/health/plugins` | 无 | 插件加载与初始化状态；依赖健康在管理员插件目录查看 |
 | GET | `/api/admin/tools` | `X-Kaung-Admin-Key` | 按分类读取工具定义与启用状态 |
 | PUT | `/api/admin/tools/{name}/enabled` | `X-Kaung-Admin-Key` | 启用或停用工具 |
 | POST | `/api/admin/tools/{name}/test` | `X-Kaung-Admin-Key` | 使用管理身份测试工具并记录日志 |
@@ -220,13 +233,19 @@ curl http://localhost:5091/api/admin/call-logs \
 | POST | `/api/admin/admin-key/rotate` | `X-Kaung-Admin-Key` | 轮换管理员密钥并同步本地启动配置 |
 | GET | `/api/admin/certificate` | `X-Kaung-Admin-Key` | 下载局域网 HTTPS 公有证书 |
 
-分页参数 `pageSize` 的最大值为 100。调用日志支持 `clientId`、`source`（`mcp_client`、`admin_test` 或 `scheduler`）、`method`、`toolName`、`succeeded`、`fromUtc` 和 `toUtc` 筛选；已鉴权的 MCP 请求（初始化、能力查询、工具、提示词、资源等）按客户端记录方法、耗时、结果、错误摘要和 TraceId，后台工具测试与定时任务调用以独立来源记录。请求参数和接口输出会保存，不采集 HTTP 鉴权头。正文仅通过管理员详情接口按需读取。管理页每条记录的“详情”弹窗支持格式化查看与分别复制，关闭后保留筛选和页码。升级前的历史记录仍保留，未保存的参数和输出会明确提示；新请求没有参数时显示 `null`，未捕获到响应时显示相应提示。通知和鉴权失败的请求不归入客户端日志。
+分页参数 `pageSize` 的最大值为 100。调用日志支持 `clientId`、`source`（`mcp_client`、`admin_test` 或 `scheduler`）、`method`、`toolName`、`succeeded`、`fromUtc` 和 `toUtc` 筛选；已鉴权的 MCP 请求（初始化、能力查询、工具、提示词、资源等）按客户端记录方法、耗时、结果、错误摘要和 TraceId，后台工具测试与定时任务调用以独立来源记录。请求参数和接口输出会保存，不采集 HTTP 鉴权头。正文仅通过管理员详情接口按需读取。管理页每条记录的“详情”弹窗支持格式化查看与分别复制，关闭后保留筛选和页码。新请求没有参数时显示 `null`，未捕获到响应时显示相应提示。通知和鉴权失败的请求不归入客户端日志。
 
 ## 配置
 
 | 环境变量 | 服务 | 用途 |
 | --- | --- | --- |
 | `KAUNG_MCP_ADMIN_KEY` | KaungMcp | 管理 API 密钥，至少 32 个字符 |
+| `WebTools__SearchEnabled` | KaungMcp | 网页搜索工具启动默认值，默认 true；已保存工具状态优先 |
+| `WebTools__FetchEnabled` | KaungMcp | 网页读取工具启动默认值，默认 true；已保存工具状态优先 |
+| `Plugins__Directory` | KaungMcp | 插件安装目录，默认宿主程序集旁的 plugins；启动脚本使用 .kaung/plugins |
+| `Plugins__DataDirectory` | KaungMcp | 插件业务数据根目录，默认 data/plugins |
+| `Scheduler__MaxConcurrency` | KaungMcp | 全局任务并发上限，默认 4 |
+| `Scheduler__PluginConcurrency` | KaungMcp | 每插件任务并发上限，默认 2 |
 | `ConnectionStrings__KaungMcp` | KaungMcp | SQLite 连接字符串 |
 | `KAUNG_AGENT_API_KEY` | KaungAgent | Agent API 密钥，至少 32 个字符 |
 | `KAUNG_MCP_API_KEY` | KaungAgent | 调用 KaungMcp 的客户端密钥 |
@@ -238,7 +257,7 @@ curl http://localhost:5091/api/admin/call-logs \
 | `STATIC_SEARCH_ENDPOINT` | KaungMcp | 可选；静态搜索页地址，默认 `https://www.bing.com/search` |
 | `WebSearch__StaticFallback__Enabled` | KaungMcp | 可选；设为 `false` 时关闭静态搜索托底 |
 
-KaungAgent 工作区数据库默认位于 `data/kaungagent.db`，Data Protection 密钥默认位于 `.kaung/keys`。KaungMcp 数据库仍位于 `data/kaungmcp.db`。
+KaungAgent 工作区数据库默认位于 `data/kaungagent.db`，Data Protection 密钥默认位于 `.kaung/keys`。KaungMcp 宿主数据库位于 `data/host.db`。
 
 ## 当前边界
 

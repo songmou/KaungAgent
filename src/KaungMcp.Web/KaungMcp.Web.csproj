@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../KaungMcp.Foundation/KaungMcp.Foundation.csproj" />
+    <PackageReference Include="Microsoft.Playwright" />
+    <PackageReference Include="ReverseMarkdown" />
+    <PackageReference Include="SmartReader" />
+  </ItemGroup>
+</Project>

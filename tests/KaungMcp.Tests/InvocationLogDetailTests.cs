@@ -161,28 +161,8 @@ public sealed class InvocationLogDetailTests
     }
 
     [Fact]
-    public async Task Migration_preserves_historical_rows_and_detail_reports_missing_payloads()
+    public async Task Logs_without_payloads_are_reported_explicitly()
     {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        await using var db = new KaungMcpDbContext(new DbContextOptionsBuilder<KaungMcpDbContext>().UseSqlite(connection).Options);
-        var migrator = db.GetService<IMigrator>();
-        await migrator.MigrateAsync("20260923020911_ExpandMcpRequestLogs");
-        var id = Guid.NewGuid();
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO McpClientApplications (Id,Name,KeyId,KeyHash,IsEnabled,CreatedAtUtc,UpdatedAtUtc)
-            VALUES ({id},'legacy','legacy',X'01',1,'2026-09-01','2026-09-01')
-            """);
-        await db.Database.ExecuteSqlInterpolatedAsync($"""
-            INSERT INTO McpInvocationLogs (ClientApplicationId,ToolName,RequestMethod,StartedAtUtc,DurationMilliseconds,Succeeded)
-            VALUES ({id},'kaung_echo','tools/call',0,17,1)
-            """);
-        await migrator.MigrateAsync();
-        var entry = await db.InvocationLogs.SingleAsync();
-        Assert.Equal(17, entry.DurationMilliseconds);
-        Assert.Null(entry.RequestParametersJson);
-        Assert.Null(entry.ResponseBody);
-
         await using var factory = new McpWebApplicationFactory();
         using var admin = CreateAdmin(factory);
         var client = await CreateClient(admin);

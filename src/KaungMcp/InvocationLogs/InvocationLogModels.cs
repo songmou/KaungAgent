@@ -18,7 +18,15 @@ public sealed record InvocationLogResponse(
     long? OutputTokens,
     long? TotalTokens,
     long? BillableUnits,
-    long? CostMicros);
+    long? CostMicros,
+    string? CorrelationId = null)
+{
+    public string? OwnerId { get; init; }
+    public string? OwnerKind { get; init; }
+    public string? OwnerName { get; init; }
+    public string? TargetDisplayName { get; init; }
+    public Guid? TaskRunId { get; init; }
+}
 
 public static class InvocationSources
 {

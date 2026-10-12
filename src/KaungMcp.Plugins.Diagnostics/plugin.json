@@ -1,0 +1,8 @@
+{
+  "id": "diagnostics",
+  "name": "基础诊断",
+  "version": "1.0.0",
+  "contractVersion": 1,
+  "entryAssembly": "KaungMcp.Plugins.Diagnostics.dll",
+  "entryType": "KaungMcp.Plugins.Diagnostics.DiagnosticsPlugin"
+}

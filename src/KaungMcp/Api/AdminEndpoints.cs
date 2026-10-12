@@ -1,20 +1,37 @@
 using KaungMcp.Clients;
+using KaungMcp.Capabilities;
+using KaungMcp.Data;
+using KaungMcp.Web;
+using Microsoft.EntityFrameworkCore;
 using KaungMcp.Configuration;
 using KaungMcp.InvocationLogs;
 using KaungMcp.Security;
 using KaungMcp.Scheduling;
 using KaungMcp.Tools;
+using KaungMcp.Plugins;
 
 namespace KaungMcp.Api;
 
 public static class AdminEndpoints
 {
+    private static string? OwnerAlias(string? ownerId, string? pluginId)
+    {
+        if (!string.IsNullOrWhiteSpace(ownerId) && !string.IsNullOrWhiteSpace(pluginId) && ownerId != pluginId) throw new ArgumentException("ownerId 与 pluginId 不一致。");
+        return ownerId ?? pluginId;
+    }
     public static IEndpointRouteBuilder MapAdminEndpoints(this IEndpointRouteBuilder endpoints)
     {
         var group = endpoints.MapGroup("/api/admin")
             .RequireAuthorization(SecurityConstants.AdminPolicy)
             .WithTags("MCP administration");
 
+        group.MapGet("/settings/definitions", (SettingsDefinitionService definitions, ManagedSettingsStore settings) =>
+            definitions.Definitions().Select(s => new { s.OwnerId, s.OwnerKind, s.OwnerName, s.Definition, baselineValue = settings.BaselineValue(s.Definition.Key) }));
+        group.MapGet("/capability-owners", async (CapabilityRegistry capabilities, IDbContextFactory<KaungMcpDbContext> database, CancellationToken ct) =>
+        { await using var db = await database.CreateDbContextAsync(ct); return await capabilities.CatalogAsync(db, ct); });
+        group.MapGet("/modules/web", async (McpToolManagementService tools, PluginRuntime plugins, CancellationToken ct) => new
+        { id = "web", ownerKind = "module", name = "网页能力", version = "1.0.0", status = "ready", legacyPackagePresent = plugins.LegacyWebPackagePresent,
+          tools = (await tools.GetCatalogAsync(ct)).Categories.SelectMany(c => c.Tools).Where(t => t.OwnerId == "web").OrderBy(t => t.Name == "kaung_web_search" ? 0 : 1) });
         group.MapGet("/settings", (ManagedSettingsStore settings) => settings.Snapshot());
         group.MapPost("/settings/validate", (SettingsChange request, ManagedSettingsStore settings, CancellationToken ct) =>
             settings.ValidateChangeAsync(request, ct));
@@ -34,50 +51,62 @@ public static class AdminEndpoints
         group.MapGet("/tools", (McpToolManagementService service, CancellationToken cancellationToken) =>
             service.GetCatalogAsync(cancellationToken));
 
-        group.MapGet("/scheduler/catalog", (SchedulerService scheduler, CancellationToken ct) =>
-            scheduler.CatalogAsync(ct));
-        group.MapPost("/scheduler/validate-schedule", (ScheduleValidationRequest request, SchedulerService scheduler,
-            TimeProvider clock) => SchedulerService.ValidateSchedule(request, clock.GetUtcNow()));
-        group.MapGet("/scheduled-tasks", (int? page, int? pageSize, string? status, string? executionType,
-            string? target, SchedulerService scheduler, CancellationToken ct) =>
-            scheduler.ListAsync(page ?? 1, pageSize ?? 20, status, executionType, target, ct));
-        group.MapPost("/scheduled-tasks", async (ScheduledTaskChange request, SchedulerService scheduler,
-            CancellationToken ct) =>
+        group.MapGet("/plugins", (PluginRuntime runtime, IServiceProvider services, CancellationToken ct) => runtime.CatalogAsync(services, ct));
+        group.MapPut("/plugins/{id}/enabled", async (string id, SetMcpToolEnabledRequest request, PluginRuntime runtime,
+            SchedulerService scheduler, IServiceProvider services, CancellationToken ct) =>
+        {
+            if (!await runtime.SetEnabledAsync(id, request.IsEnabled, services, ct)) return Results.NotFound();
+            await scheduler.RefreshPluginAsync(id, ct);
+            return Results.Ok(new { id, request.IsEnabled });
+        });
+        group.MapGet("/plugins/{id}/task-definitions", (string id, PluginRuntime runtime) => runtime.Definitions(id));
+        group.MapGet("/scheduled-tasks", (int? page, int? pageSize, string? pluginId, string? ownerId, string? status,
+            SchedulerService scheduler, CancellationToken ct) => scheduler.ListAsync(page ?? 1, pageSize ?? 20, OwnerAlias(ownerId, pluginId), status, ct));
+        group.MapPost("/scheduled-tasks/preview", (ScheduledTaskChange request, Guid? planId, SchedulerService scheduler, CancellationToken ct) => scheduler.PreviewAsync(request, planId, ct));
+        group.MapPost("/scheduled-tasks", async (ScheduledTaskChange request, SchedulerService scheduler, CancellationToken ct) =>
         {
             var task = await scheduler.CreateAsync(request, ct);
             return Results.Created($"/api/admin/scheduled-tasks/{task.Id}", task);
         });
         group.MapGet("/scheduled-tasks/{id:guid}", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
             await scheduler.GetAsync(id, ct) is { } task ? Results.Ok(task) : Results.NotFound());
-        group.MapPut("/scheduled-tasks/{id:guid}", async (Guid id, ScheduledTaskChange request,
-            SchedulerService scheduler, CancellationToken ct) =>
+        group.MapPut("/scheduled-tasks/{id:guid}", async (Guid id, ScheduledTaskChange request, SchedulerService scheduler, CancellationToken ct) =>
             await scheduler.UpdateAsync(id, request, ct) is { } task ? Results.Ok(task) : Results.NotFound());
         group.MapDelete("/scheduled-tasks/{id:guid}", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
-            await scheduler.SetStateAsync(id, "archive", ct) is { } task ? Results.Ok(task) : Results.NotFound());
-        foreach (var action in new[] { "enable", "disable", "restore" })
+            await scheduler.SetStateAsync(id, "delete", ct) is { } task ? Results.Ok(task) : Results.NotFound());
+        foreach (var action in new[] { "enable", "disable" })
         {
             var operation = action;
-            group.MapPost($"/scheduled-tasks/{{id:guid}}/{operation}", async (Guid id,
-                SchedulerService scheduler, CancellationToken ct) =>
+            group.MapPost($"/scheduled-tasks/{{id:guid}}/{operation}", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
                 await scheduler.SetStateAsync(id, operation, ct) is { } task ? Results.Ok(task) : Results.NotFound());
         }
-        group.MapPost("/scheduled-tasks/{id:guid}/run", async (Guid id, SchedulerService scheduler,
-            CancellationToken ct) =>
-            await scheduler.RunAsync(id, "manual", true, ct) is { } run ? Results.Ok(run) : Results.NotFound());
-        group.MapGet("/scheduled-tasks/{id:guid}/runs", (Guid id, int? page, int? pageSize,
-            SchedulerService scheduler, CancellationToken ct) =>
-            scheduler.RunsAsync(id, page ?? 1, pageSize ?? 20, ct));
-        group.MapGet("/scheduled-task-runs/{runId:long}", async (long runId, SchedulerService scheduler,
-            CancellationToken ct) =>
-            await scheduler.RunDetailAsync(runId, ct) is { } run ? Results.Ok(run) : Results.NotFound());
+        group.MapPost("/scheduled-tasks/{id:guid}/run", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
+        {
+            var runId = await scheduler.SubmitAsync(id, "manual", ct);
+            return Results.Accepted($"/api/admin/task-runs/{runId}", new { runId });
+        });
+        group.MapGet("/scheduled-tasks/{id:guid}/runs", (Guid id, int? page, int? pageSize, SchedulerService scheduler, CancellationToken ct) =>
+            scheduler.RunsAsync(id, null, page ?? 1, pageSize ?? 20, ct));
+        group.MapGet("/task-runs", (string? pluginId, string? ownerId, string? ownerKind, Guid? taskId, string? status, string? trigger, DateTimeOffset? fromUtc, DateTimeOffset? toUtc, string? correlationId, int? page, int? pageSize, SchedulerService scheduler, CancellationToken ct) =>
+            scheduler.RunsAsync(taskId, OwnerAlias(ownerId, pluginId), page ?? 1, pageSize ?? 20, ct, status, trigger, fromUtc, toUtc, ownerKind, correlationId));
+        group.MapGet("/task-runs/{id:guid}", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
+            await scheduler.RunDetailAsync(id, ct) is { } run ? Results.Ok(run) : Results.NotFound());
+        group.MapPost("/task-runs/{id:guid}/cancel", async (Guid id, SchedulerService scheduler, CancellationToken ct) =>
+            await scheduler.CancelAsync(id, ct) is { } run ? Results.Ok(run) : Results.NotFound());
 
         group.MapPut("/tools/{name}/enabled", async (
             string name,
             SetMcpToolEnabledRequest request,
             McpToolManagementService service,
+            SchedulerService scheduler,
             CancellationToken cancellationToken) =>
         {
             var state = await service.SetEnabledAsync(name, request.IsEnabled, cancellationToken);
+            if (state is not null)
+            {
+                var owner = (await service.GetCatalogAsync(cancellationToken)).Categories.SelectMany(c => c.Tools).FirstOrDefault(t => t.Name == name)?.OwnerId;
+                if (owner is not null) await scheduler.RefreshPluginAsync(owner, cancellationToken, name);
+            }
             return state is null ? Results.NotFound() : Results.Ok(new { name, isEnabled = state.Value });
         });
 
@@ -149,6 +178,7 @@ public static class AdminEndpoints
             string? toolName,
             string? method,
             string? source,
+            string? ownerId, string? ownerKind, string? correlationId,
             bool? succeeded,
             DateTimeOffset? fromUtc,
             DateTimeOffset? toUtc,
@@ -166,7 +196,7 @@ public static class AdminEndpoints
                 toUtc,
                 page ?? 1,
                 pageSize ?? 20,
-                cancellationToken));
+                cancellationToken, ownerId, ownerKind, correlationId));
 
         group.MapGet("/call-logs/{id:long}", async (
             long id, McpInvocationLogService service, CancellationToken cancellationToken) =>

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Channels;
 using KaungMcp.Data;
+using KaungMcp.Capabilities;
 using KaungMcp.Data.Entities;
 using KaungMcp.InvocationLogs;
 using Microsoft.EntityFrameworkCore;
@@ -19,13 +20,9 @@ public sealed class McpToolManagementService(
     IServiceProvider services,
     IOptions<McpServerOptions> serverOptions,
     ILoggerFactory loggerFactory,
-    IConfiguration configuration)
+    CapabilityRegistry plugins)
 {
-    public bool JewelryOnly => configuration.GetValue("McpExposure:JewelryOnly", false);
-    private bool ClientVisible(string name) => !InternalOnly.Contains(name) &&
-        (!JewelryOnly || name.StartsWith("kaung_jewelry_", StringComparison.Ordinal));
-
-    private static readonly HashSet<string> InternalOnly = new(StringComparer.Ordinal) { "kaung_jewelry_get_source_status" };
+    private bool ClientVisible(string name) => plugins.Available(plugins.ToolOwner(name)) && plugins.ToolPolicy(name)?.ClientVisible == true;
 
     private readonly IReadOnlyDictionary<string, McpServerTool> tools = registeredTools
         .ToDictionary(tool => tool.ProtocolTool.Name, StringComparer.Ordinal);
@@ -37,7 +34,7 @@ public sealed class McpToolManagementService(
             .ToDictionaryAsync(item => item.ToolName, item => item.IsEnabled, StringComparer.Ordinal, cancellationToken);
 
         var groups = tools.Values
-            .Select(tool => CreateCatalogItem(tool, ClientVisible(tool.ProtocolTool.Name) && settings.GetValueOrDefault(tool.ProtocolTool.Name, true)))
+            .Select(tool => CreateCatalogItem(tool, settings.GetValueOrDefault(tool.ProtocolTool.Name, plugins.DefaultEnabled(tool.ProtocolTool.Name))))
             .GroupBy(item => item.Category.Id, StringComparer.Ordinal)
             .Select(group =>
             {
@@ -59,8 +56,8 @@ public sealed class McpToolManagementService(
         return new McpToolCatalogResponse(
             groups,
             allTools.Length,
-            allTools.Count(tool => tool.IsEnabled),
-            allTools.Count(tool => !tool.IsEnabled));
+            allTools.Count(tool => tool.IsAvailable),
+            allTools.Count(tool => !tool.IsAvailable));
     }
 
     public async Task<bool?> SetEnabledAsync(string name, bool isEnabled, CancellationToken cancellationToken)
@@ -94,7 +91,7 @@ public sealed class McpToolManagementService(
         return await dbContext.ToolSettings.AsNoTracking()
             .Where(item => item.ToolName == name)
             .Select(item => (bool?)item.IsEnabled)
-            .SingleOrDefaultAsync(cancellationToken) ?? true;
+            .SingleOrDefaultAsync(cancellationToken) ?? plugins.DefaultEnabled(name);
     }
 
     public async Task<HashSet<string>> GetDisabledNamesAsync(CancellationToken cancellationToken)
@@ -104,7 +101,8 @@ public sealed class McpToolManagementService(
             .Where(item => !item.IsEnabled)
             .Select(item => item.ToolName)
             .ToHashSetAsync(StringComparer.Ordinal, cancellationToken);
-        disabled.UnionWith(tools.Keys.Where(name => !ClientVisible(name)));
+        var explicitNames = await dbContext.ToolSettings.Select(t => t.ToolName).ToListAsync(cancellationToken);
+        disabled.UnionWith(tools.Keys.Where(name => !ClientVisible(name) || !explicitNames.Contains(name) && !plugins.DefaultEnabled(name)));
         return disabled;
     }
 
@@ -113,9 +111,11 @@ public sealed class McpToolManagementService(
         JsonElement arguments,
         bool confirmRisk,
         CancellationToken cancellationToken,
-        string source = InvocationSources.AdminTest)
+        string source = InvocationSources.AdminTest,
+        string? correlationId = null)
     {
         if (!tools.TryGetValue(name, out var tool)) return null;
+        if (!plugins.Available(plugins.ToolOwner(name))) throw new ArgumentException("所属能力已停用或不可用。");
         if (source == InvocationSources.Scheduler && !await IsEnabledAsync(name, cancellationToken))
             throw new InvalidOperationException($"Tool '{name}' is disabled.");
         if (arguments.ValueKind != JsonValueKind.Object)
@@ -177,7 +177,7 @@ public sealed class McpToolManagementService(
             error ?? (succeeded ? null : "The tool returned an error result."),
             requestPayload,
             responsePayload,
-            source);
+            source, correlationId);
 
         return new TestMcpToolResponse(
             succeeded,
@@ -188,7 +188,7 @@ public sealed class McpToolManagementService(
             await IsEnabledAsync(name, cancellationToken));
     }
 
-    private static (McpToolCategoryAttribute Category, McpToolResponse Tool) CreateCatalogItem(
+    private (McpToolCategoryAttribute Category, McpToolResponse Tool) CreateCatalogItem(
         McpServerTool tool,
         bool isEnabled)
     {
@@ -212,7 +212,12 @@ public sealed class McpToolManagementService(
             annotations?.OpenWorldHint,
             isEnabled,
             parameterCount,
-            risky));
+            risky,
+            plugins.ToolOwner(protocolTool.Name),
+            plugins.ToolPolicy(protocolTool.Name)?.Schedulable == true,
+            isEnabled && ClientVisible(protocolTool.Name))
+            { OwnerId = plugins.ToolOwner(protocolTool.Name), OwnerKind = plugins.ToolOwner(protocolTool.Name) is { } owner ? plugins.Kind(owner) : null,
+              OwnerName = plugins.ToolOwner(protocolTool.Name) is { } id ? plugins.Name(id) : null });
     }
 
     private static CallToolResult ErrorResult(string message) => new()

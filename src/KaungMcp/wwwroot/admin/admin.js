@@ -3,13 +3,13 @@ let adminKey = sessionStorage.getItem(KEY) || '';
 let tab = 'overview', clients = [], selectedClient = '', clientPage = 1, logPage = 1;
 let logSource = '', logToolName = '', toolCatalog = null, toolSearch = '', toolStatus = 'all', toolCategory = '';
 let selectedToolName = '', toolTestController = null, toolRawMode = false;
-let settings = null, dirty = new Set();
+let settings = null;
 const $ = selector => document.querySelector(selector);
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 const date = value => value ? new Date(value).toLocaleString('zh-CN') : '—';
 const show = (selector, visible) => $(selector).classList.toggle('hidden', !visible);
 function flash(message, error = false) { const box = $('#flash'); box.textContent = message; box.className = `flash${error ? ' error' : ''}`; window.scrollTo({top:0,behavior:'smooth'}); }
-function authScreen() { closeLogDetail(); closeToolDetail(); show('#login', true); show('#shell', false); $('#admin-key').value = ''; }
+function authScreen() { runDetailId=null; schedulerDialog.close(); closeLogDetail(); closeToolDetail(); show('#login', true); show('#shell', false); $('#admin-key').value = ''; }
 async function api(path, options = {}) {
   const headers = {'X-Kaung-Admin-Key':adminKey, ...options.headers};
   if (options.body && !(options.body instanceof FormData)) headers['Content-Type'] = 'application/json';
@@ -24,16 +24,24 @@ async function api(path, options = {}) {
 async function json(path, options) { return (await api(path, options)).json(); }
 async function run(task) { try { await task(); } catch (error) { flash(error.message, true); } }
 function switchTab(name) {
+  if (!leaveConfiguration()) return false;
+  if (name==='runs'||name==='logs') { recordsSection=name;name='records'; }
+  if (name==='search'||name==='fetch') { webSection=name;name='web'; }
+  configGeneration++;pluginDetailGeneration++;
   tab = name;
   document.querySelectorAll('.view').forEach(view => view.classList.toggle('hidden', view.id !== name));
   document.querySelectorAll('[data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
   $('#flash').classList.add('hidden');
   if (name === 'clients') run(loadClients);
   if (name === 'tools') run(loadTools);
+  if (name === 'plugins') run(loadPlugins);
+  if (name === 'web') run(loadWeb);
+  if (name === 'records') loadRecords();
   if (name === 'scheduler') run(loadScheduler);
-  if (name === 'logs') run(loadLogs);
-  if (['search','fetch','service'].includes(name)) run(loadSettings);
+
+  if (name === 'service') run(loadSystemSettings);
   if (name === 'overview') run(loadOverview);
+  return true;
 }
 async function enter(key) {
   adminKey = key;
@@ -93,7 +101,7 @@ function renderTools() {
   if (!categories.some(category => category.id === toolCategory)) toolCategory = categories[0]?.id || '';
   const activeCategory = categories.find(category => category.id === toolCategory);
   const categoryTabs = categories.map(category => `<button class="tool-tab ${category.id===toolCategory?'active':''}" type="button" role="tab" aria-selected="${category.id===toolCategory}" data-tool-category="${esc(category.id)}"><span>${esc(category.displayName)}</span><span class="tool-tab-count">${category.tools.length}</span></button>`).join('');
-  const toolCards = activeCategory?.tools.map(tool => `<article class="tool-card ${tool.isEnabled?'':'disabled'}"><div class="tool-card-head"><span class="pill ${tool.isEnabled?'green':'red'}">${tool.isEnabled?'已启用':'已停用'}</span><span class="muted">${tool.parameterCount} 个参数</span></div><button class="tool-card-main" data-tool-open="${esc(tool.name)}"><strong>${esc(tool.title || tool.name)}</strong><code>${esc(tool.name)}</code><p>${esc(tool.description || '暂无描述')}</p></button><div class="tool-badges">${toolBadges(tool)}</div><div class="tool-card-actions"><button class="button primary" data-tool-open="${esc(tool.name)}">查看与测试</button><button class="button ${tool.isEnabled?'danger':''}" data-tool-toggle="${esc(tool.name)}">${tool.isEnabled?'停用':'启用'}</button></div></article>`).join('') || '';
+  const toolCards = activeCategory?.tools.map(tool => `<article class="tool-card ${tool.isEnabled?'':'disabled'}"><div class="tool-card-head"><span class="pill ${tool.isEnabled?'green':'red'}">${tool.isAvailable?'可用':tool.isEnabled?'所属能力不可用或内部工具':'已停用'}</span><span class="muted">${esc(tool.ownerName||tool.pluginId)} · ${tool.parameterCount} 个参数</span></div><button class="tool-card-main" data-tool-open="${esc(tool.name)}"><strong>${esc(tool.title || tool.name)}</strong><code>${esc(tool.name)}</code><p>${esc(tool.description || '暂无描述')}</p></button><div class="tool-badges">${toolBadges(tool)}</div><div class="tool-card-actions"><button class="button primary" data-tool-open="${esc(tool.name)}">查看与测试</button><button class="button ${tool.isEnabled?'danger':''}" data-tool-toggle="${esc(tool.name)}">${tool.isEnabled?'停用':'启用'}</button></div></article>`).join('') || '';
   const categoryHtml = categories.length ? `<div class="tool-tabs" role="tablist" aria-label="工具分类">${categoryTabs}</div><section class="tool-category" role="tabpanel"><div class="tool-category-head"><div><h2>${esc(activeCategory?.displayName || '')}</h2><p>${esc(activeCategory?.description || '')}</p></div><span class="pill">${activeCategory?.tools.length || 0} 个</span></div>${toolCards?`<div class="tool-grid">${toolCards}</div>`:'<div class="panel empty">当前分类没有符合条件的工具。</div>'}</section>` : '<div class="panel empty">暂无工具分类。</div>';
   $('#tools').innerHTML = `<div class="page-head"><div><p class="eyebrow">TOOL CATALOG</p><h1>工具管理</h1><p>查看 MCP 工具定义、控制客户端可用性，并直接测试真实工具实现。</p></div><button class="button" id="refresh-tools">刷新</button></div>
   <div class="stats tool-stats"><div class="panel stat"><span>分类</span><strong>${toolCatalog.categories.length}</strong><span>代码显式维护</span></div><div class="panel stat"><span>工具总数</span><strong>${toolCatalog.totalCount}</strong><span>SDK 实际注册</span></div><div class="panel stat"><span>已启用</span><strong>${toolCatalog.enabledCount}</strong><span>客户端可以发现</span></div><div class="panel stat"><span>已停用</span><strong>${toolCatalog.disabledCount}</strong><span>后台仍可测试</span></div></div>
@@ -143,13 +151,14 @@ function parameterControl(field, index) {
   else control = `<input type="text" data-param-value="${index}" value="${hasDefault?esc(d.default):''}" ${disabled}>`;
   return `<div class="tool-param-field" data-param-index="${index}"><div class="tool-param-label"><strong>${esc(field.name)}</strong><span class="mono">${esc(type)}</span>${include}</div>${control}<small>${esc(d.description || '暂无参数说明')}${schemaConstraints(d)!=='—'?` · ${esc(schemaConstraints(d))}`:''}</small></div>`;
 }
-function openToolDetail(name) {
+async function openToolDetail(name) {
+  toolCatalog = await json('/api/admin/tools');
   const tool = toolByName(name); if (!tool) return;
   toolTestController?.abort(); toolTestController = null; selectedToolName = name; toolRawMode = false;
   const fields = schemaProperties(tool);
   const rows = fields.map(field => `<tr><td><strong>${esc(field.name)}</strong></td><td class="mono">${esc(schemaType(field.definition))}</td><td>${field.required?'是':'否'}</td><td>${esc(schemaConstraints(field.definition))}</td><td>${esc(field.definition.description || '—')}</td></tr>`).join('');
   $('#tool-detail-title').textContent = tool.title || tool.name;
-  $('#tool-detail-content').innerHTML = `<div class="tool-detail-summary"><div><code>${esc(tool.name)}</code><p>${esc(tool.description || '暂无描述')}</p><div class="tool-badges">${toolBadges(tool)}</div></div><div class="actions"><span class="pill ${tool.isEnabled?'green':'red'}">${tool.isEnabled?'已启用':'已停用'}</span><button id="detail-toggle-tool" class="button ${tool.isEnabled?'danger':''}">${tool.isEnabled?'停用':'启用'}</button></div></div>
+  $('#tool-detail-content').innerHTML = `<div class="tool-detail-summary"><div><code>${esc(tool.name)}</code><p>${esc(tool.description || '暂无描述')}</p><div class="tool-badges">${toolBadges(tool)}</div></div><div class="actions"><span class="pill ${tool.isEnabled?'green':'red'}">${tool.isAvailable?'可用':tool.isEnabled?'所属能力不可用或内部工具':'已停用'}</span><button id="detail-toggle-tool" class="button ${tool.isEnabled?'danger':''}">${tool.isEnabled?'停用':'启用'}</button></div></div>
   <section class="tool-detail-section"><div class="panel-head"><h3>参数定义</h3><span class="muted">${fields.length} 个</span></div><div class="table-wrap"><table class="table"><thead><tr><th>参数</th><th>类型</th><th>必填</th><th>默认值 / 约束</th><th>描述</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="empty">此工具没有参数</td></tr>'}</tbody></table></div></section>
   <section class="tool-detail-section schema-details"><details><summary>输入 JSON Schema</summary><pre>${esc(pretty(tool.inputSchema))}</pre></details><details><summary>输出 JSON Schema</summary><pre>${tool.outputSchema?esc(pretty(tool.outputSchema)):'未声明结构化输出 Schema'}</pre></details></section>
   <section class="tool-detail-section tool-runner"><div class="panel-head"><div><h3>测试调用</h3><p class="muted">${tool.isEnabled?'调用真实工具实现。':'该工具对客户端已停用，但管理员仍可验证。'}</p></div><button id="toggle-tool-input" class="button" ${fields.length?'':'disabled'}>使用原始 JSON</button></div><form id="tool-test-form"><div id="tool-form-input" class="tool-parameter-grid">${fields.map(parameterControl).join('')||'<p class="muted">无需填写参数。</p>'}</div><div id="tool-raw-input" class="field hidden"><span>参数 JSON 对象</span><textarea id="tool-raw-json" rows="10">{}</textarea></div><p id="tool-test-status" class="muted" role="status" aria-live="polite"></p><div class="actions"><button id="run-tool-test" class="button primary" type="submit">执行测试</button><button id="cancel-tool-test" class="button hidden" type="button">取消</button></div></form><div id="tool-test-result"></div></section>`;
@@ -223,7 +232,7 @@ async function runToolTest(tool, fields) {
     status.textContent = `${data.succeeded?'执行成功':'执行失败'} · ${data.durationMilliseconds} ms · ${data.isEnabled?'工具已启用':'工具已停用'}`;
     resultBox.innerHTML = `<div class="tool-result-head"><span class="pill ${data.succeeded?'green':'red'}">${data.succeeded?'成功':'失败'}</span><div class="actions"><button id="copy-tool-result" class="button">复制结果</button><button id="view-tool-log" class="button">查看日志</button></div></div><pre class="tool-result-payload" tabindex="0">${esc(pretty(data.result))}</pre>`;
     $('#copy-tool-result').onclick = () => navigator.clipboard.writeText(pretty(data.result)).then(() => {status.textContent='结果已复制。';});
-    $('#view-tool-log').onclick = () => { closeToolDetail(); selectedClient=''; logSource='admin_test'; logToolName=tool.name; logPage=1; switchTab('logs'); };
+    $('#view-tool-log').onclick = () => { closeToolDetail(); selectedClient=''; logSource='admin_test'; logToolName=tool.name; logOwner=tool.ownerId||'';logCorrelation='';logPage=1; switchTab('logs'); };
   } catch (error) {
     if (error.name === 'AbortError') status.textContent = '测试已取消，未写入调用日志。';
     else status.textContent = `测试失败：${error.message}`;
@@ -249,7 +258,7 @@ async function loadClients() {
 }
 async function clientAction(action, id) {
   const client = clients.find(item => item.id === id); if (!client) return;
-  if (action === 'logs') { selectedClient = id; logSource = ''; logToolName = ''; logPage = 1; switchTab('logs'); return; }
+  if (action === 'logs') { selectedClient = id; logSource = ''; logToolName = ''; logOwner='';logCorrelation='';logFilters={method:'',result:'',from:'',to:''};logPage = 1; switchTab('logs'); return; }
   const local = client.name.startsWith('kaung-agent-local');
   const warning = local ? '\n这是本地 Agent 客户端。轮换、停用或删除会立即中断 Agent 连接；轮换后需同步 .kaung/local.env 中的 KAUNG_MCP_API_KEY 并重启 Agent。' : '';
   if (!confirm(`确定要${{rotate:'轮换密钥',disable:'停用',enable:'启用',delete:'删除'}[action]}“${client.name}”吗？${warning}`)) return;
@@ -266,33 +275,26 @@ async function allClients() {
   do { const data = await json(`/api/admin/clients?page=${page}&pageSize=100&includeDeleted=true`); items.push(...data.items); total = data.totalCount; page++; } while (items.length < total);
   return items;
 }
-async function loadLogs() {
-  const query = new URLSearchParams({page:String(logPage),pageSize:'20'});
-  if (selectedClient) query.set('clientId',selectedClient);
-  const method = $('#log-method')?.value || '', result = $('#log-result')?.value || '';
-  logSource = $('#log-source')?.value ?? logSource;
-  logToolName = $('#log-tool')?.value ?? logToolName;
-  const from = $('#log-from')?.value || '', to = $('#log-to')?.value || '';
-  if (method) query.set('method',method);
-  if (logSource) query.set('source',logSource);
-  if (logToolName) query.set('toolName',logToolName);
-  if (result) query.set('succeeded',result);
-  if (from) query.set('fromUtc',new Date(from).toISOString());
-  if (to) query.set('toUtc',new Date(to).toISOString());
-  const data = await json(`/api/admin/call-logs?${query}`);
-  const clientData = await allClients();
-  const options = clientData.map(item => `<option value="${item.id}" ${selectedClient===item.id?'selected':''}>${esc(item.name)}${item.deletedAtUtc?'（已删除）':''}</option>`).join('');
-  const rows = data.items.map(item => `<tr><td>${date(item.startedAtUtc)}</td><td><div class="source-label"><strong>${esc(item.clientName)}</strong><small>${item.source==='admin_test'?'后台测试':item.source==='scheduler'?'定时任务':'MCP 客户端'}</small></div></td><td><strong>${esc(item.requestMethod)}</strong><br><span class="mono muted">${esc(item.targetName || '')}</span></td><td><span class="pill ${item.succeeded?'green':'red'}">${item.succeeded?'成功':'失败'}</span></td><td>${item.durationMilliseconds} ms</td><td title="${esc(item.errorMessage)}">${esc(item.errorCode || '—')}</td><td class="mono">${esc(item.traceId || '—')}</td><td><button class="button" data-log-detail="${item.id}">详情</button></td></tr>`).join('');
-  $('#logs').innerHTML = `<div class="page-head"><div><p class="eyebrow">INVOCATION LOGS</p><h1>调用日志</h1><p>统一查看 MCP 客户端、后台测试和定时任务调用。</p></div><button class="button" id="refresh-logs">刷新</button></div><div class="panel"><div class="filters log-filters"><label>来源<select id="log-source"><option value="" ${!logSource?'selected':''}>全部来源</option><option value="mcp_client" ${logSource==='mcp_client'?'selected':''}>MCP 客户端</option><option value="admin_test" ${logSource==='admin_test'?'selected':''}>后台测试</option><option value="scheduler" ${logSource==='scheduler'?'selected':''}>定时任务</option></select></label><label>客户端<select id="log-client" ${logSource==='admin_test'||logSource==='scheduler'?'disabled':''}><option value="">全部客户端</option>${options}</select></label><label>工具名称<input id="log-tool" value="${esc(logToolName)}" placeholder="全部或输入工具"></label><label>请求方法<input id="log-method" list="mcp-methods" value="${esc(method)}" placeholder="全部或输入方法"><datalist id="mcp-methods">${['initialize','server/discover','ping','tools/list','tools/call','prompts/list','prompts/get','resources/list','resources/templates/list','resources/read'].map(value=>`<option value="${value}"></option>`).join('')}</datalist></label><label>结果<select id="log-result"><option value="">全部</option><option value="true" ${result==='true'?'selected':''}>成功</option><option value="false" ${result==='false'?'selected':''}>失败</option></select></label><label>开始时间<input id="log-from" type="datetime-local" value="${esc(from)}"></label><label>结束时间<input id="log-to" type="datetime-local" value="${esc(to)}"></label></div><div class="actions"><button class="button primary" id="apply-logs">筛选</button><button class="button" id="clear-logs">清除筛选</button></div></div><div class="panel"><div class="panel-head"><h2>请求记录</h2><span class="muted">${data.totalCount} 条</span></div><div class="table-wrap"><table class="table"><thead><tr><th>时间</th><th>来源 / 客户端</th><th>方法 / 目标</th><th>结果</th><th>耗时</th><th>错误</th><th>Trace ID</th><th>操作</th></tr></thead><tbody>${rows||'<tr><td colspan="8" class="empty">暂无调用记录</td></tr>'}</tbody></table></div>${pagination(data,'log')}</div>`;
-  $('#log-source').onchange = event => {logSource=event.target.value;if(logSource==='admin_test'||logSource==='scheduler')selectedClient='';logPage=1;run(loadLogs);};
-  $('#log-client').onchange = event => {selectedClient=event.target.value;if(selectedClient)logSource='mcp_client';logPage=1;run(loadLogs);};
-  $('#refresh-logs').onclick = () => run(loadLogs);
-  $('#apply-logs').onclick = () => {logPage=1;run(loadLogs);};
-  $('#clear-logs').onclick = () => {selectedClient='';logSource='';logToolName='';logPage=1;$('#log-method').value='';$('#log-result').value='';$('#log-from').value='';$('#log-to').value='';run(loadLogs);};
-  bindPages('#logs','log');
-  $('#logs').querySelectorAll('[data-log-detail]').forEach(button => button.onclick = () => openLogDetail(button.dataset.logDetail));
+let logOwner='', logCorrelation='', logGeneration=0, logFilters={method:'',result:'',from:'',to:''};
+async function loadLogs(){
+  const generation=++logGeneration,query=new URLSearchParams({page:String(logPage),pageSize:'20'});
+  if(selectedClient)query.set('clientId',selectedClient);
+  for(const [key,value] of [['method',logFilters.method],['source',logSource],['toolName',logToolName],['succeeded',logFilters.result],['ownerId',logOwner],['correlationId',logCorrelation]])if(value)query.set(key,value);
+  if(logFilters.from)query.set('fromUtc',new Date(logFilters.from).toISOString());if(logFilters.to)query.set('toUtc',new Date(logFilters.to).toISOString());
+  const [data,clientItems,owners]=await Promise.all([json(`/api/admin/call-logs?${query}`),allClients(),json('/api/admin/capability-owners')]);
+  if(generation!==logGeneration||tab!=='records'||recordsSection!=='logs')return;
+  const owner=owners.find(p=>p.id===logOwner);
+  const sourceLabel=s=>s==='admin_test'?'后台测试':s==='scheduler'?'定时任务':'MCP 客户端';
+  const selectOptions=(items,value)=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===value?'selected':''}>${esc(l)}</option>`).join('');
+  $('#logs').innerHTML=`<div class="record-subhead"><h2>调用日志</h2><button class="button" id="refresh-logs">刷新</button></div>${logOwner||logCorrelation?`<div class="context-banner"><span>当前范围：${esc(owner?.name||(logOwner==='host'?'系统':logOwner)||'全部')}${logCorrelation?' · 关联执行':''}</span><button class="button" id="log-context-clear">清除范围</button></div>`:''}<form id="log-filter-form" class="panel"><div class="filters log-filters"><label>所属能力 / 插件<select id="log-owner">${selectOptions([['','全部'],['host','系统'],...owners.map(o=>[o.id,o.name])],logOwner)}</select></label><label>来源<select id="log-source">${selectOptions([['','全部来源'],['mcp_client','MCP 客户端'],['admin_test','后台测试'],['scheduler','定时任务']],logSource)}</select></label><label>客户端<select id="log-client" ${['admin_test','scheduler'].includes(logSource)?'disabled':''}>${selectOptions([['','全部客户端'],...clientItems.map(c=>[c.id,c.name])],selectedClient)}</select></label><label>工具名称<input id="log-tool" value="${esc(logToolName)}" placeholder="全部或输入工具名称"></label><label>请求方法<input id="log-method" list="mcp-methods" value="${esc(logFilters.method)}" placeholder="全部或输入方法"><datalist id="mcp-methods">${['initialize','server/discover','ping','tools/list','tools/call','prompts/list','prompts/get','resources/list','resources/templates/list','resources/read','tasks/execute'].map(value=>`<option value="${value}"></option>`).join('')}</datalist></label><label>结果<select id="log-result">${selectOptions([['','全部'],['true','成功'],['false','失败']],logFilters.result)}</select></label><label>开始时间<input id="log-from" type="datetime-local" value="${esc(logFilters.from)}"></label><label>结束时间<input id="log-to" type="datetime-local" value="${esc(logFilters.to)}"></label></div><div class="actions"><button class="button primary" type="submit">筛选</button><button class="button" type="button" id="clear-logs">清除筛选</button></div></form>
+  <div class="panel"><div class="panel-head"><h2>请求记录</h2><span class="muted">${data.totalCount} 条</span></div><div class="table-wrap"><table class="table records-table"><thead><tr><th>时间 / 耗时</th><th>所属 / 目标</th><th>来源 / 客户端</th><th>结果 / 错误</th><th style="width:72px">操作</th></tr></thead><tbody>${data.items.map(item=>`<tr><td>${date(item.startedAtUtc)}<br><small class="muted">${item.durationMilliseconds} 毫秒</small></td><td><strong>${esc(item.targetDisplayName||item.targetName||item.requestMethod)}</strong><br>${esc(item.ownerName||'归属未知')}<br><code>${esc(item.requestMethod)} · ${esc(item.targetName||'')}</code></td><td>${esc(sourceLabel(item.source))}<br><small class="muted">${esc(item.clientName)}</small></td><td><span class="pill ${item.succeeded?'green':'red'}">${item.succeeded?'成功':'失败'}</span><br><span class="summary-text" title="${esc(item.errorMessage||'')}">${esc(item.errorMessage||item.errorCode||'—')}</span></td><td><button class="button" data-log-detail="${item.id}">详情</button></td></tr>`).join('')||'<tr><td colspan="5" class="empty">当前筛选条件下暂无调用记录。</td></tr>'}</tbody></table></div>${pagination(data,'log')}</div>`;
+  $('#log-source').onchange=e=>{const internal=['admin_test','scheduler'].includes(e.target.value);$('#log-client').disabled=internal;if(internal)$('#log-client').value='';};
+  $('#log-filter-form').onsubmit=e=>{e.preventDefault();logSource=$('#log-source').value;selectedClient=$('#log-client').value;if(selectedClient)logSource='mcp_client';logOwner=$('#log-owner').value;logToolName=$('#log-tool').value;logFilters={method:$('#log-method').value,result:$('#log-result').value,from:$('#log-from').value,to:$('#log-to').value};if(logFilters.from&&logFilters.to&&logFilters.from>logFilters.to){flash('开始时间不能晚于结束时间。',true);return;}logPage=1;run(loadLogs);};
+  const clear=()=>{selectedClient='';logSource='';logToolName='';logOwner='';logCorrelation='';logFilters={method:'',result:'',from:'',to:''};logPage=1;run(loadLogs);};
+  $('#clear-logs').onclick=clear;if($('#log-context-clear'))$('#log-context-clear').onclick=clear;
+  $('#refresh-logs').onclick=()=>run(loadLogs);bindPages('#logs','log');
+  $('#logs').querySelectorAll('[data-log-detail]').forEach(b=>b.onclick=()=>run(()=>openLogDetail(b.dataset.logDetail)));
 }
-
 
 let logDetailController = null, logDetailVersion = 0, logDetailId = null;
 const logDetailDialog = $('#log-detail-dialog');
@@ -333,7 +335,7 @@ async function openLogDetail(id) {
     const metadata = document.createElement('dl');
     metadata.className = 'log-detail-metadata';
     for (const [label, value] of [
-      ['来源',item.source === 'admin_test' ? '后台测试' : item.source === 'scheduler' ? '定时任务' : 'MCP 客户端'],['客户端',item.clientName],['请求方法',item.requestMethod],['目标',item.targetName || '—'],
+      ['所属能力 / 插件',item.ownerName||'归属未知'],['来源',item.source === 'admin_test' ? '后台测试' : item.source === 'scheduler' ? '定时任务' : 'MCP 客户端'],['客户端',item.clientName],['请求方法',item.requestMethod],['目标',item.targetDisplayName||item.targetName||'—'],['关联 ID',item.correlationId||'—'],
       ['时间',date(item.startedAtUtc)],['耗时',`${item.durationMilliseconds} ms`],
       ['状态',item.succeeded ? '成功' : '失败'],['Trace ID',item.traceId || '—'],
       ...(item.errorCode ? [['错误',`${item.errorCode}：${item.errorMessage || ''}`]] : [])
@@ -347,10 +349,11 @@ async function openLogDetail(id) {
       ['请求参数',detail.requestParametersJson,'该记录未保存请求参数'],
       ['接口输出',detail.responseBody,detail.requestParametersJson === null ? '该记录未保存接口输出' : '本次调用未捕获到接口输出（可能已取消或连接中断）']
     ]) {
-      const section = document.createElement('section'), header = document.createElement('div');
-      section.className = 'log-payload'; header.className = 'panel-head';
+      const section = document.createElement('details'), header = document.createElement('div');
+      section.className = 'log-payload payload-block'; header.className = 'panel-head';
+      const summary = document.createElement('summary');summary.textContent = label;section.append(summary);
       const title = document.createElement('h3'), copy = document.createElement('button');
-      title.textContent = label; copy.textContent = '复制'; copy.className = 'button';
+      title.textContent = '原始数据'; copy.textContent = '复制'; copy.className = 'button';
       copy.disabled = value === null;
       const formatted = value === null ? missing : prettyPayload(value);
       copy.onclick = async () => {
@@ -366,6 +369,10 @@ async function openLogDetail(id) {
       body.textContent = formatted; body.tabIndex = 0; body.setAttribute('aria-label', label);
       section.append(header, body); content.append(section);
     }
+    if(item.taskRunId){
+      const button=document.createElement('button');button.className='button';button.textContent='关联任务运行';
+      button.onclick=()=>{closeLogDetail();runsCorrelation=item.correlationId||'';taskRunsPlan='';taskRunsPlugin='';taskRunsPage=1;switchTab('runs');run(()=>openTaskRun(item.taskRunId));};content.prepend(button);
+    }
     $('#log-detail-status').textContent = '';
   } catch (error) {
     if (version !== logDetailVersion || !logDetailDialog.open || error.name === 'AbortError') return;
@@ -374,40 +381,4 @@ async function openLogDetail(id) {
   }
 }
 
-const groups = {
-  search: {title:'搜索配置',subtitle:'SearXNG 搜索地址、开关及静态回退在保存后立即生效。容器启动设置位于“服务与安全”。',fields:[
-    ['WebSearch:SearXng:Enabled','启用 SearXNG 搜索','bool'],['WebSearch:SearXng:BaseUrl','SearXNG 搜索地址','text'],['WebSearch:TimeoutSeconds','搜索超时（秒）','number'],['WebSearch:StaticFallback:Enabled','启用静态搜索回退','bool'],['WebSearch:StaticFallback:BaseUrl','静态回退地址','text'],['WebSearch:StaticFallback:TimeoutSeconds','回退超时（秒）','number'],['WebSearch:StaticFallback:MaxResponseBytes','回退响应上限（字节）','number'],['WebSearch:StaticFallback:UserAgent','回退 User-Agent','text']]},
-  fetch: {title:'网页读取',subtitle:'以下设置保存后立即作用于后续请求。',fields:[
-    ['WebFetch:TimeoutSeconds','读取超时（秒）','number'],['WebFetch:MaxResponseBytes','响应上限（字节）','number'],['WebFetch:MaxRedirects','最大重定向次数','number'],['WebFetch:BrowserFallbackEnabled','启用浏览器回退','bool'],['WebFetch:UserAgent','User-Agent','text'],['WebFetch:RobotsCacheMinutes','robots 缓存（分钟）','number']]},
-  service: {title:'服务与安全',subtitle:'管理员密钥立即更换；监听、数据库、日志级别和 SearXNG 启动方式在重启后生效。',fields:[
-    ['McpHost:LocalPort','本机 HTTP 端口','number'],['McpHost:LanEnabled','启用局域网 HTTPS','bool'],['McpHost:LanAddress','局域网私有 IPv4 地址','text'],['McpHost:LanPort','局域网 HTTPS 端口','number'],['AllowedHosts','允许的 Host','text'],['ConnectionStrings:KaungMcp','现有 SQLite 连接字符串','text'],['Logging:LogLevel:Default','默认日志级别','level'],['Logging:LogLevel:Microsoft.AspNetCore','ASP.NET Core 日志级别','level'],['SearXngLauncher:Mode','SearXNG 启动方式','mode'],['SearXngLauncher:Port','本地 SearXNG 端口','number'],['SearXngLauncher:ExternalEndpoint','外部 SearXNG 地址','text']]}
-};
-async function loadSettings() { settings = await json('/api/admin/settings'); dirty.clear(); renderSettings(tab); }
-function field(key,label,type) {
-  const desired = settings.desired[key] ?? '', effective = settings.effective[key] ?? '';
-  const pending = settings.pendingRestart.includes(key), overridden = settings.overrides.includes(key);
-  let control;
-  if (type === 'bool') control = `<select data-setting="${key}"><option value="true" ${desired.toLowerCase()==='true'?'selected':''}>启用</option><option value="false" ${desired.toLowerCase()==='false'?'selected':''}>停用</option></select>`;
-  else if (type === 'mode') control = `<select data-setting="${key}">${[['local','本地容器'],['external','外部服务'],['disabled','停用']].map(([v,t])=>`<option value="${v}" ${desired===v?'selected':''}>${t}</option>`).join('')}</select>`;
-  else if (type === 'level') control = `<select data-setting="${key}">${['Trace','Debug','Information','Warning','Error','Critical','None'].map(v=>`<option value="${v}" ${desired===v?'selected':''}>${v}</option>`).join('')}</select>`;
-  else control = `<input data-setting="${key}" type="${type}" value="${esc(desired)}">`;
-  return `<div class="field ${pending?'pending':''}"><span>${label} ${pending?'<span class="pill amber">待重启</span>':''}</span><div class="field-row">${control}<button type="button" class="button" data-reset="${key}" ${overridden?'':'disabled'} title="恢复原始配置来源">恢复</button></div><small>当前生效：${esc(effective || '—')}${overridden?' · 页面覆盖':''}</small></div>`;
-}
-function renderSettings(name) {
-  const group = groups[name]; if (!group || !settings) return;
-  const pending = settings.pendingRestart.length;
-  const extra = name === 'service' ? `<div class="panel"><h2>管理员密钥</h2><p class="muted">新密钥至少 32 位。轮换后会同步一键启动的本地配置，并更新当前标签页会话。</p><form id="rotate-admin" class="field-grid"><div class="field"><span>新管理员密钥</span><input id="new-admin-key" type="password" minlength="32" autocomplete="new-password" required></div><div class="section-actions"><button class="button danger" type="submit">轮换管理员密钥</button></div></form></div><div class="panel"><h2>局域网证书</h2><p class="muted">启用局域网 HTTPS 时自动生成自签证书。其他设备须手动信任公有证书。</p><div class="config-table"><div class="config-line"><strong>证书指纹</strong><code>${esc(settings.certificate?.thumbprint || '尚未生成')}</code></div><div class="config-line"><strong>有效期至</strong><span>${settings.certificate?.notAfterUtc ? date(settings.certificate.notAfterUtc) : '—'}</span></div></div><div class="section-actions"><button id="download-cert" class="button" ${settings.certificate?'':'disabled'}>下载公有证书</button></div></div>` : '';
-  $(`#${name}`).innerHTML = `<div class="page-head"><div><p class="eyebrow">CONFIGURATION</p><h1>${group.title}</h1><p>${group.subtitle}</p></div></div>${pending?`<div class="notice warning">${pending} 项服务设置已保存，重启后生效。</div>`:''}<div class="panel"><div class="field-grid">${group.fields.map(([k,l,t])=>field(k,l,t)).join('')}</div><div class="section-actions"><button id="save-settings" class="button primary">保存修改</button></div></div>${extra}`;
-  $(`#${name}`).querySelectorAll('[data-setting]').forEach(input => input.onchange = () => dirty.add(input.dataset.setting));
-  $(`#${name}`).querySelectorAll('[data-reset]').forEach(button => button.onclick = () => run(async () => { settings = await json('/api/admin/settings',{method:'PUT',body:JSON.stringify({clear:[button.dataset.reset]})});flash('已恢复原始配置来源。');renderSettings(name); }));
-  $('#save-settings').onclick = () => run(async () => {
-    const changes = {}; for (const key of dirty) changes[key] = $(`[data-setting="${key}"]`).value;
-    if (!Object.keys(changes).length) {flash('没有待保存的修改。');return;}
-    settings = await json('/api/admin/settings',{method:'PUT',body:JSON.stringify({changes})});dirty.clear();flash('配置已保存。');renderSettings(name);
-  });
-  if (name === 'service') {
-    $('#rotate-admin').onsubmit = event => {event.preventDefault();run(async()=>{const key=$('#new-admin-key').value;if(!confirm('确定轮换管理员密钥？旧密钥将立即失效。'))return;await api('/api/admin/admin-key/rotate',{method:'POST',body:JSON.stringify({newKey:key})});adminKey=key;sessionStorage.setItem(KEY,key);$('#new-admin-key').value='';flash('管理员密钥已轮换并同步本地启动配置。');});};
-    $('#download-cert').onclick = () => run(async()=>{const response=await api('/api/admin/certificate');const blob=await response.blob();const url=URL.createObjectURL(blob);const link=document.createElement('a');link.href=url;link.download='kaungmcp-lan.cer';link.click();URL.revokeObjectURL(url);});
-  }
-}
-if (adminKey) enter(adminKey).catch(() => authScreen()); else authScreen();
+window.addEventListener('DOMContentLoaded',()=>{if (adminKey) enter(adminKey).catch(() => authScreen()); else authScreen();});

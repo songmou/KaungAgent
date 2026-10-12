@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="/admin/admin.css">
   <script src="/admin/admin.js" defer></script>
   <script src="/admin/scheduler.js" defer></script>
+  <script src="/admin/plugins.js" defer></script>
+  <script src="/admin/configuration.js" defer></script>
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -26,13 +28,13 @@
       <div class="brand"><span class="brand-mark">K</span><span>KaungMcp<small>管理工作台</small></span></div>
       <nav aria-label="管理导航">
         <button data-tab="overview" class="active">概览</button>
+        <button data-tab="web">网页能力</button>
+        <button data-tab="plugins">插件管理</button>
         <button data-tab="tools">工具管理</button>
         <button data-tab="scheduler">定时任务</button>
+        <button data-tab="records">执行记录</button>
         <button data-tab="clients">客户端与密钥</button>
-        <button data-tab="logs">调用日志</button>
-        <button data-tab="search">搜索配置</button>
-        <button data-tab="fetch">网页读取</button>
-        <button data-tab="service">服务与安全</button>
+        <button data-tab="service">系统设置</button>
       </nav>
       <div class="sidebar-bottom"><a href="/" target="_blank">服务状态</a><button id="logout">退出管理</button></div>
     </aside>
@@ -40,12 +42,12 @@
       <div class="topline"><span>本地服务管理</span><span id="connection" class="live-dot">已连接</span></div>
       <div id="flash" class="flash hidden" role="status"></div>
       <section id="overview" class="view"></section>
+      <section id="plugins" class="view hidden"></section>
+      <section id="web" class="view hidden"></section>
+      <section id="records" class="view hidden"><div class="page-head"><div><h1>执行记录</h1><p>查看任务运行和请求调用，按所属能力或插件追踪执行。</p></div></div><div id="record-tabs"></div><section id="runs"></section><section id="logs" class="hidden"></section></section>
       <section id="tools" class="view hidden"></section>
       <section id="scheduler" class="view hidden"></section>
       <section id="clients" class="view hidden"></section>
-      <section id="logs" class="view hidden"></section>
-      <section id="search" class="view hidden"></section>
-      <section id="fetch" class="view hidden"></section>
       <section id="service" class="view hidden"></section>
     </main>
   </div>

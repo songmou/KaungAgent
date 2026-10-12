@@ -65,7 +65,7 @@ public sealed class BrandCollectionTests
         Assert.Equal(1, adapter.Calls["sojinjia"]);
         Assert.False(adapter.Calls.ContainsKey("zhenshepin"));
         Assert.False(adapter.Calls.ContainsKey("jxgjtz"));
-        await using var db = await factory.Services.GetRequiredService<IDbContextFactory<KaungMcpDbContext>>().CreateDbContextAsync();
+        await using var db = await factory.Services.GetRequiredService<IDbContextFactory<JewelryDbContext>>().CreateDbContextAsync();
         var records = await db.JewelryQuotes.ToListAsync();
         Assert.DoesNotContain(records, q => q.InstrumentId == "BRAND:chowsangsang" && q.SourceId == "sojinjia" &&
             JsonSerializer.Deserialize<JewelryQuote>(q.PayloadJson, new JsonSerializerOptions(JsonSerializerDefaults.Web))!.Category == "jewelry");
@@ -92,7 +92,7 @@ public sealed class BrandCollectionTests
         Assert.Contains(results, r => r.SourceId == "sojinjia" && r.Status == "failed");
         Assert.Equal(1, adapter.Calls["zhenshepin"]);
         Assert.Equal(1, adapter.Calls["jxgjtz"]);
-        await using var db = await factory.Services.GetRequiredService<IDbContextFactory<KaungMcpDbContext>>().CreateDbContextAsync();
+        await using var db = await factory.Services.GetRequiredService<IDbContextFactory<JewelryDbContext>>().CreateDbContextAsync();
         Assert.False(await db.JewelryQuotes.AnyAsync(q => q.SourceId == "zhenshepin"));
         Assert.True(await db.JewelryQuotes.AnyAsync(q => q.SourceId == "jxgjtz"));
         // A later official update takes priority without deleting fallback history.
@@ -114,61 +114,6 @@ public sealed class BrandCollectionTests
         var response = await service.GetQuotesAsync(true, ["BRAND:laofengxiang"], "today", "jewelry", "CN", default);
         Assert.Empty(response.Items[0].Quotes);
         Assert.Equal("date_missing", response.Items[0].Status);
-    }
-
-    [Theory]
-    [InlineData("unchanged", true)]
-    [InlineData("edited", false)]
-    [InlineData("disabled", false)]
-    [InlineData("archived", false)]
-    public async Task Legacy_default_migration_is_idempotent_and_preserves_user_tasks(string mode, bool migrated)
-    {
-        await using var factory = Factory(new BrandAdapter());
-        using var http = factory.CreateClient();
-        await factory.Services.GetRequiredService<SchedulerService>().InitializeAsync(default);
-        var database = factory.Services.GetRequiredService<IDbContextFactory<KaungMcpDbContext>>();
-        await using (var db = await database.CreateDbContextAsync())
-        {
-            var task = await db.ScheduledTasks.SingleAsync(t => t.Name == "品牌金价采集");
-            task.Target = "jewelry.collect_sources";
-            task.ArgumentsJson = "{\"sourceIds\":[\"chowsangsang\",\"lukfook\"]}";
-            task.UpdatedTicks = task.CreatedTicks;
-            if (mode == "edited") task.UpdatedTicks++;
-            if (mode == "disabled") task.IsEnabled = false;
-            if (mode == "archived") task.IsArchived = true;
-            await db.SaveChangesAsync();
-        }
-        var scheduler = new SchedulerService(database, factory.Services,
-            factory.Services.GetRequiredService<IOptions<JewelryOptions>>(), new Clock(),
-            factory.Services.GetRequiredService<ILogger<SchedulerService>>());
-        await scheduler.InitializeAsync(default);
-        await scheduler.InitializeAsync(default);
-        await using var check = await database.CreateDbContextAsync();
-        Assert.Equal(3, await check.ScheduledTasks.CountAsync());
-        Assert.Equal(migrated ? SchedulerService.BrandHandler : "jewelry.collect_sources",
-            (await check.ScheduledTasks.SingleAsync(t => t.Name == "品牌金价采集")).Target);
-    }
-
-    [Fact]
-    public async Task Disabled_collection_does_not_allow_fast_or_duplicate_brand_tasks_or_query_collection()
-    {
-        var adapter = new BrandAdapter();
-        await using var factory = new McpWebApplicationFactory(services =>
-        {
-            services.AddSingleton<IJewelryAdapter>(adapter);
-            services.Configure<JewelryOptions>(o => o.Enabled = false);
-        });
-        using var http = factory.CreateClient();
-        var scheduler = factory.Services.GetRequiredService<SchedulerService>();
-        var fast = new ScheduledTaskChange("brands", null, "internal_handler", SchedulerService.BrandHandler,
-            JsonSerializer.SerializeToElement(new { }), "interval", 15, null, "Asia/Shanghai", true);
-        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.CreateAsync(fast, default));
-        await Assert.ThrowsAsync<ArgumentException>(() => scheduler.CreateAsync(fast with { IntervalMinutes = 60 }, default));
-        var task = (await scheduler.ListAsync(1, 20, "active", null, null, default)).Items.Single(t => t.Target == SchedulerService.BrandHandler);
-        await scheduler.SetStateAsync(task.Id, "disable", default);
-        var service = factory.Services.GetRequiredService<JewelryService>();
-        await service.GetQuotesAsync(true, ["BRAND:laofengxiang"], "today", "jewelry", "CN", default);
-        Assert.Empty(adapter.Calls);
     }
 
     private static McpWebApplicationFactory Factory(BrandAdapter adapter) => new(services =>

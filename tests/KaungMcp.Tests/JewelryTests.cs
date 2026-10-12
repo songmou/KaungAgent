@@ -196,16 +196,16 @@ public sealed class JewelryTests
     }
 
     [Fact]
-    public async Task Concurrent_cold_queries_are_coalesced_and_disabled_sources_never_collect()
+    public async Task Concurrent_queries_do_not_start_uncontrolled_collection()
     {
         var adapter = new FixtureAdapter();
         await using var factory = Factory(adapter, new TestClock(Now));
         using var client = factory.CreateClient();
         var service = factory.Services.GetRequiredService<JewelryService>();
         var results = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => service.GetQuotesAsync(false, ["XAU/USD", "COMEX:GC"], "latest", null, "CN", default)));
-        Assert.Equal(1, adapter.Calls);
+        Assert.Equal(0, adapter.Calls);
         Assert.DoesNotContain("cme", adapter.CalledSources);
-        Assert.All(results, r => Assert.Equal("available", r.Items.Single(i => i.InstrumentId == "XAU/USD").Status));
+        Assert.All(results, r => Assert.Equal("no_data", r.Items.Single(i => i.InstrumentId == "XAU/USD").Status));
     }
 
     [Fact]
@@ -242,6 +242,7 @@ public sealed class JewelryTests
         await using var factory = Factory(adapter, new TestClock(Now));
         using var client = factory.CreateClient();
         var service = factory.Services.GetRequiredService<JewelryService>();
+        await service.CollectDueAsync(["gold_api"], default);
         var latest = await service.GetQuotesAsync(false, ["XAU/USD"], "latest", null, "CN", default);
         var quote = Assert.Single(latest.Items[0].Quotes);
         Assert.Equal("unknown_time", quote.DataState);
@@ -249,27 +250,6 @@ public sealed class JewelryTests
         Assert.Null(quote.Quote.SourceDate);
         Assert.Empty((await service.HistoryAsync("XAU/USD", "2026-09-27", "2026-09-27", "source_date", 0, 100, default)).Items);
         Assert.Single((await service.HistoryAsync("XAU/USD", "2026-09-27", "2026-09-27", "collected_date", 0, 100, default)).Items);
-    }
-
-    [Fact]
-    public async Task Migration_upgrades_old_database_without_changing_clients_and_model_has_no_pending_changes()
-    {
-        await using var connection = new SqliteConnection("Data Source=:memory:");
-        await connection.OpenAsync();
-        await using var db = new KaungMcpDbContext(new DbContextOptionsBuilder<KaungMcpDbContext>().UseSqlite(connection).Options);
-        await db.GetService<IMigrator>().MigrateAsync("20260923065633_AddInvocationLogPayloads");
-        var id = Guid.NewGuid();
-        db.ClientApplications.Add(new McpClientApplication
-        {
-            Id = id, Name = "existing-client", KeyId = "existing-key", KeyHash = new byte[32], IsEnabled = true,
-            CreatedAtUtc = Now, UpdatedAtUtc = Now
-        });
-        await db.SaveChangesAsync();
-        await db.Database.MigrateAsync();
-        db.ChangeTracker.Clear();
-        Assert.Equal("existing-client", (await db.ClientApplications.SingleAsync(c => c.Id == id)).Name);
-        Assert.Empty(await db.JewelryQuotes.ToListAsync());
-        Assert.False(db.Database.HasPendingModelChanges());
     }
 
     [Fact]
@@ -300,6 +280,7 @@ public sealed class JewelryTests
         admin.DefaultRequestHeaders.Add(SecurityConstants.AdminHeader, McpWebApplicationFactory.AdminKey);
         var response = await admin.PostAsJsonAsync("/api/admin/clients", new CreateClientRequest("jewelry-tests", "fixture-only"));
         var created = (await response.Content.ReadFromJsonAsync<CreatedClientResponse>())!;
+        await factory.Services.GetRequiredService<JewelryService>().CollectDueAsync(null, default);
         var http = factory.CreateClient();
         await using var mcp = await McpClient.CreateAsync(new HttpClientTransport(new HttpClientTransportOptions
         {

@@ -28,7 +28,15 @@ public sealed record McpToolResponse(
     bool? OpenWorld,
     bool IsEnabled,
     int ParameterCount,
-    bool RequiresRiskConfirmation);
+    bool RequiresRiskConfirmation,
+    string? PluginId,
+    bool Schedulable,
+    bool IsAvailable)
+{
+    public string? OwnerId { get; init; }
+    public string? OwnerKind { get; init; }
+    public string? OwnerName { get; init; }
+}
 
 public sealed record SetMcpToolEnabledRequest(bool IsEnabled);
 

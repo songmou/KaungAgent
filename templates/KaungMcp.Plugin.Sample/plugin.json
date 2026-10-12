@@ -1,0 +1,8 @@
+{
+  "id": "sample",
+  "name": "示例插件",
+  "version": "1.0.0",
+  "contractVersion": 1,
+  "entryAssembly": "KaungMcp.Plugin.Sample.dll",
+  "entryType": "KaungMcp.Sample.SamplePlugin"
+}

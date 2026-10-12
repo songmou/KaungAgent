@@ -146,7 +146,7 @@ public sealed class ManagementIntegrationTests
         using var rotated = factory.CreateClient();
         rotated.DefaultRequestHeaders.Add(SecurityConstants.AdminHeader, replacement);
         (await rotated.GetAsync("/api/admin/settings")).EnsureSuccessStatusCode();
-        Assert.True(File.Exists(factory.DatabasePath + ".settings.json"));
+        Assert.NotNull(ManagedSettingsStore.Read(factory.DatabasePath).AdminKeyHash);
         Assert.Contains($"KAUNG_MCP_ADMIN_KEY={replacement}",
             await File.ReadAllTextAsync(factory.DatabasePath + ".local.env"), StringComparison.Ordinal);
         var configuration = factory.Services.GetRequiredService<IConfiguration>();

@@ -1,58 +1,58 @@
-using Microsoft.Extensions.DependencyInjection;
+using KaungMcp.Plugins;
+using KaungMcp.Capabilities;
 using ModelContextProtocol;
 using ModelContextProtocol.Protocol;
-
+using ModelContextProtocol.Server;
 namespace KaungMcp.Tools;
 
 public static class McpToolAvailabilityExtensions
 {
     public static IMcpServerBuilder AddToolAvailability(this IMcpServerBuilder builder) =>
         builder.WithRequestFilters(filters => filters
-            .AddListToolsFilter(next => async (context, cancellationToken) =>
+            .AddListToolsFilter(next => async (context, ct) =>
             {
-                var result = await next(context, cancellationToken);
-                var service = context.Services!.GetRequiredService<McpToolManagementService>();
-                var disabled = await service.GetDisabledNamesAsync(cancellationToken);
-                result.Tools = result.Tools.Where(tool => !disabled.Contains(tool.Name)).ToList();
-                return result;
+                var result = await next(context, ct);
+                var disabled = await context.Services!.GetRequiredService<McpToolManagementService>().GetDisabledNamesAsync(ct);
+                result.Tools = result.Tools.Where(t => !disabled.Contains(t.Name)).ToList(); return result;
             })
             .AddListPromptsFilter(next => async (context, ct) =>
-                context.Services!.GetRequiredService<McpToolManagementService>().JewelryOnly
-                    ? new ListPromptsResult { Prompts = [] } : await next(context, ct))
-            .AddListResourcesFilter(next => async (context, ct) =>
-                context.Services!.GetRequiredService<McpToolManagementService>().JewelryOnly
-                    ? new ListResourcesResult { Resources = [] } : await next(context, ct))
-            .AddListResourceTemplatesFilter(next => async (context, ct) =>
-                context.Services!.GetRequiredService<McpToolManagementService>().JewelryOnly
-                    ? new ListResourceTemplatesResult { ResourceTemplates = [] } : await next(context, ct))
-            .AddGetPromptFilter(next => async (context, ct) =>
-                context.Services!.GetRequiredService<McpToolManagementService>().JewelryOnly
-                    ? throw new McpException("此服务仅提供行情数据工具。") : await next(context, ct))
-            .AddReadResourceFilter(next => async (context, ct) =>
-                context.Services!.GetRequiredService<McpToolManagementService>().JewelryOnly
-                    ? throw new McpException("此服务仅提供行情数据工具。") : await next(context, ct))
-            .AddCallToolFilter(next => async (context, cancellationToken) =>
             {
-                var service = context.Services!.GetRequiredService<McpToolManagementService>();
+                var result = await next(context, ct);
+                var runtime = context.Services!.GetRequiredService<PluginRuntime>();
+                result.Prompts = result.Prompts.Where(p => runtime.PromptAvailable(p.Name)).ToList(); return result;
+            })
+            .AddListResourcesFilter(next => async (context, ct) =>
+            {
+                var result = await next(context, ct);
+                var runtime = context.Services!.GetRequiredService<PluginRuntime>();
+                result.Resources = result.Resources.Where(r => runtime.ResourceAvailable(r.Uri)).ToList(); return result;
+            })
+            .AddListResourceTemplatesFilter(next => async (context, ct) =>
+            {
+                var result = await next(context, ct);
+                var runtime = context.Services!.GetRequiredService<PluginRuntime>();
+                result.ResourceTemplates = result.ResourceTemplates.Where(r => runtime.ResourceAvailable(r.UriTemplate)).ToList(); return result;
+            })
+            .AddGetPromptFilter(next => async (context, ct) =>
+            {
+                if (!context.Services!.GetRequiredService<PluginRuntime>().PromptAvailable(context.Params?.Name ?? "")) throw new McpException("提示词插件不可用。");
+                return await next(context, ct);
+            })
+            .AddReadResourceFilter(next => async (context, ct) =>
+            {
+                var resource = context.MatchedPrimitive as McpServerResource;
+                var ownerUri = resource?.ProtocolResourceTemplate?.UriTemplate ?? resource?.ProtocolResource?.Uri ?? context.Params?.Uri ?? "";
+                if (!context.Services!.GetRequiredService<PluginRuntime>().ResourceAvailable(ownerUri)) throw new McpException("资源插件不可用。");
+                return await next(context, ct);
+            })
+            .AddCallToolFilter(next => async (context, ct) =>
+            {
                 var name = context.Params?.Name ?? "";
-                if (!await service.IsEnabledAsync(name, cancellationToken))
-                    throw new McpException($"Tool '{name}' is disabled by the administrator.");
-                if (!name.StartsWith("kaung_jewelry_", StringComparison.Ordinal))
-                    return await next(context, cancellationToken);
-                try
-                {
-                    var result = await next(context, cancellationToken);
-                    return result.IsError == true ? DataError() : result;
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-                catch (Exception)
-                {
-                    return DataError();
-                }
+                if (!await context.Services!.GetRequiredService<McpToolManagementService>().IsEnabledAsync(name, ct)) throw new McpException("工具或所属能力不可用。");
+                if (context.Services!.GetRequiredService<CapabilityRegistry>().ToolPolicy(name)?.SanitizeErrors != true) return await next(context, ct);
+                try { var result = await next(context, ct); return result.IsError == true ? DataError() : result; }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+                catch (Exception) { return DataError(); }
             }));
-    private static CallToolResult DataError() => new()
-    {
-        IsError = true,
-        Content = [new TextContentBlock { Text = "暂时无法提供数据，请检查查询参数或稍后重试。" }]
-    };
+    private static CallToolResult DataError() => new() { IsError = true, Content = [new TextContentBlock { Text = "暂时无法提供数据，请检查查询参数或稍后重试。" }] };
 }

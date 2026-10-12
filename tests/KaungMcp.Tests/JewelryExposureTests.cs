@@ -38,9 +38,8 @@ public sealed class JewelryExposureTests
         var tools = await mcp.ListToolsAsync();
         Assert.Equal(6, tools.Count);
         Assert.All(tools, t => Assert.StartsWith("kaung_jewelry_", t.Name));
-        Assert.Empty(await mcp.ListPromptsAsync());
-        Assert.Empty(await mcp.ListResourcesAsync());
-        Assert.Empty(await mcp.ListResourceTemplatesAsync());
+        Assert.Null(mcp.ServerCapabilities.Prompts);
+        Assert.Null(mcp.ServerCapabilities.Resources);
         foreach (var name in new[] { "kaung_echo", "kaung_jewelry_get_source_status" })
         {
             var blocked = await mcp.CallToolAsync(name, new Dictionary<string, object?>());

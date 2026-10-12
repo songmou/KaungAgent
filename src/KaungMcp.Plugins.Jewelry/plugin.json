@@ -1,0 +1,8 @@
+{
+  "id": "jewelry",
+  "name": "珠宝行情",
+  "version": "1.0.0",
+  "contractVersion": 1,
+  "entryAssembly": "KaungMcp.Plugins.Jewelry.dll",
+  "entryType": "KaungMcp.Plugins.Jewelry.JewelryPlugin"
+}

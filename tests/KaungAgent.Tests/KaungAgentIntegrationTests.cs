@@ -12,6 +12,9 @@ using KaungMcp.Clients;
 using KaungMcp.Security;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using KaungMcp.Plugins;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using ModelContextProtocol.Protocol;
@@ -232,13 +235,30 @@ public sealed class KaungAgentIntegrationTests
         protected override void ConfigureWebHost(Microsoft.AspNetCore.Hosting.IWebHostBuilder builder)
         {
             builder.UseEnvironment("Testing");
+            IConfiguration? testConfiguration = null;
             builder.ConfigureAppConfiguration((_, configuration) =>
+            {
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["AdminAuth:Key"] = AdminKey,
                     ["AllowedHosts"] = "*",
+                    ["Plugins:Directory"] = Path.Combine(AppContext.BaseDirectory, "plugins"),
+                    ["Plugins:DataDirectory"] = _databasePath + ".plugins",
+                    ["Logging:LogLevel:Default"] = "Warning",
                     ["ConnectionStrings:KaungMcp"] = $"Data Source={_databasePath};Default Timeout=30"
-                }));
+                });
+                testConfiguration = configuration.Build();
+            });
+            builder.ConfigureTestServices(services =>
+            {
+                services.RemoveAll<PluginRuntime>();
+                services.RemoveAll<McpServerTool>();
+                services.RemoveAll<McpServerPrompt>();
+                services.RemoveAll<McpServerResource>();
+                var runtime = PluginRuntime.Discover(services, testConfiguration!);
+                services.AddSingleton(runtime);
+                runtime.RegisterMcp(services.AddMcpServer());
+            });
             if (toolsOnly)
             {
                 builder.ConfigureServices(services => services.PostConfigure<McpServerOptions>(options =>
@@ -260,6 +280,7 @@ public sealed class KaungAgentIntegrationTests
                 return;
             }
 
+            if (Directory.Exists(_databasePath + ".plugins")) Directory.Delete(_databasePath + ".plugins", true);
             foreach (var path in new[] { _databasePath, $"{_databasePath}-wal", $"{_databasePath}-shm" })
             {
                 if (File.Exists(path))

@@ -17,6 +17,7 @@ public sealed class ApiExceptionHandler(
         {
             ClientApplicationNotFoundException => (StatusCodes.Status404NotFound, "MCP client not found"),
             ClientApplicationConflictException => (StatusCodes.Status409Conflict, "MCP client conflict"),
+            KeyNotFoundException => (StatusCodes.Status404NotFound, "Not found"),
             ArgumentException => (StatusCodes.Status400BadRequest, "Invalid request"),
             _ => (StatusCodes.Status500InternalServerError, "Unexpected server error")
         };

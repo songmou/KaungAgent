@@ -4,15 +4,15 @@
 
 ## 1. 准备服务
 
-安装兼容 .NET 10 的 ASP.NET Core Runtime、Nginx 和 SQLite 命令行工具。创建专用系统用户 `kaungmcp`；创建 `/opt/kaungmcp/app` 与 `/etc/kaungmcp`。在开发机执行：
+安装兼容 .NET 10 的 ASP.NET Core Runtime、Nginx 和 SQLite 命令行工具。创建专用系统用户 `kaungmcp`；创建 `/opt/kaungmcp/app` 、`/opt/kaungmcp/plugins` 与 `/etc/kaungmcp`。在开发机执行：
 
 ```sh
 dotnet publish src/KaungMcp -c Release -o /tmp/kaungmcp-publish
 ```
 
-将发布目录内容复制到服务器 `/opt/kaungmcp/app`。复制 `service.env.example` 为 `/etc/kaungmcp/service.env`，替换随机管理员密钥、域名；文件由 root 持有，权限 `600`。复制服务模板到 `/etc/systemd/system/kaungmcp.service`。systemd 自动创建仅服务用户可写的 `/var/lib/kaungmcp`。
+将发布目录内容复制到服务器 `/opt/kaungmcp/app`，只将其中的 `plugins/jewelry` 复制到独立安装目录 `/opt/kaungmcp/plugins/jewelry`。不要安装诊断插件；网页模块由宿主内置，通过 WebTools__SearchEnabled=false 和 WebTools__FetchEnabled=false 关闭两个网页工具。复制 `service.env.example` 为 `/etc/kaungmcp/service.env`，替换随机管理员密钥、域名；文件由 root 持有，权限 `600`。复制服务模板到 `/etc/systemd/system/kaungmcp.service`。systemd 自动创建仅服务用户可写的 `/var/lib/kaungmcp`。
 
-已有 SQLite 数据库需要停机复制或使用 SQLite `.backup` 导出后迁移，不能仅复制正在写入的 `.db` 而遗漏 WAL。默认新库不包含原客户端，需重新创建客户端密钥。
+这是全新系统部署；宿主创建 host.db，珠宝插件创建自己的 plugin.db。首次部署需创建客户端。
 
 ```sh
 sudo systemctl daemon-reload
@@ -21,9 +21,9 @@ curl --fail http://127.0.0.1:5091/health/ready
 sudo journalctl -u kaungmcp -n 50
 ```
 
-仅金价采集不需要 SearXNG 和浏览器。模板关闭两者，并设置 `McpExposure__JewelryOnly=true`，使客户端仅能发现和调用六个公开金价工具；普通工具、提示词和资源均对客户端隐藏并禁止直接调用。来源状态工具始终禁止客户端发现和调用。管理员仍可内部测试注册的工具。
+仅金价采集不需要 SearXNG 和浏览器。模板关闭两个网页工具及搜索/浏览器依赖，安装目录仅放 jewelry 插件，使客户端只能发现和调用六个公开金价工具。来源状态工具始终禁止客户端发现和调用。管理员仍可内部测试注册的工具。
 
-应用监听由 `McpHost__LocalPort` 控制；设置 `ASPNETCORE_URLS` 不会覆盖代码中的回环监听。`AllowedHosts` 必须包含公网域名。管理页保存的设置优先于环境变量，迁移旧设置文件时检查域名、数据库路径和监听覆盖项；需要重启的设置应通过 systemd 重启生效。
+应用监听由 `McpHost__LocalPort` 控制；设置 `ASPNETCORE_URLS` 不会覆盖代码中的回环监听。`AllowedHosts` 必须包含公网域名。管理页保存的设置优先于环境变量，配置保存在宿主数据库中，请检查域名、数据库路径和监听覆盖项；需要重启的设置应通过 systemd 重启生效。
 
 ## 2. HTTPS 与管理入口
 
@@ -47,9 +47,8 @@ ssh -L 15091:127.0.0.1:5091 user@server
 ## 3. 采集设置与首次运行
 
 - 启用 `Jewelry__Enabled=true`。国际金价、上海金任务周期设为 15 分钟。
-- 品牌任务目标选“品牌金价补齐（官方优先）”即 `jewelry.collect_brands`，参数 `{}`，周期 60 分钟，时区 `Asia/Shanghai`，并启用任务。
-- 配置中的周期与 `BackgroundCollection` 只用于生成默认任务，已有任务以数据库为准。
-- 未修改的默认品牌任务升级时自动转换；改过、禁用或归档的任务保持原状，页面显示迁移提示。修改旧任务的目标即可启用补齐，不要另建一个与旧任务重叠的启用任务。
+- 首次加载珠宝插件创建 international、shanghai、brands 三个默认启用计划。品牌处理器为 `collect_brands`，参数 `{}`，周期 60 分钟，时区 `Asia/Shanghai`。
+- 周期和启停以管理页保存的计划为准；升级不覆盖用户编辑，也不恢复已删除的默认计划。
 - 启用服务后在管理页对三个任务“立即执行”，验证运行摘要。重启不会逐次回放停机期间错过的任务。
 - 在管理页测试内部 `kaung_jewelry_get_source_status` 查看最后成功时间、下一次尝试、最新已保存报价日期和错误。采集成功不等于网站发布了当天的新价。
 
@@ -70,7 +69,9 @@ ssh -L 15091:127.0.0.1:5091 user@server
 运行中的数据库用 SQLite 在线备份：
 
 ```sh
-sudo -u kaungmcp sqlite3 /var/lib/kaungmcp/kaungmcp.db ".backup '/var/lib/kaungmcp/backup.db'"
+sudo -u kaungmcp sqlite3 /var/lib/kaungmcp/host.db ".backup '/var/lib/kaungmcp/backup.db'"
 ```
 
-将备份和配置复制到受保护的备份目录，限制权限并制定保留周期。恢复时停止服务，保存当前数据库及 WAL/SHM，使用备份替换数据库、移走旧 WAL/SHM，修正服务用户所有权后启动，核对健康检查、客户端及任务。上线失败时停止新版本并恢复旧程序及配套数据库/配置；旧版本仍可能输出来源字段，必须关闭公网入口后再回退。
+宿主库与 `/var/lib/kaungmcp/plugins/jewelry/plugin.db` 分别在线备份，并备份产物目录。需要跨库一致的快照时停止服务后一起备份。将备份复制到受保护的备份目录，限制权限并制定保留周期。恢复时停止服务，保存当前数据库及 WAL/SHM，使用备份替换数据库、移走旧 WAL/SHM，修正服务用户所有权后启动，核对健康检查、客户端及任务。上线失败时停止新版本并恢复旧程序及配套数据库/配置；插件升级同样需要停机，并保留对应版本的程序与数据库备份。
+
+网页工具的数据库开关优先于 WebTools 环境默认值。复用已有数据库部署专用珠宝服务时，先在工具管理中停用网页搜索和读取，并检查 MCP 工具目录仅公开六个金价工具。
