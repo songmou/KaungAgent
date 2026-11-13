@@ -13,7 +13,8 @@ KaungAgent.sln
 │   ├── KaungMcp.Foundation          # 安全网络与通用基础服务
 │   ├── KaungMcp.Plugins.Diagnostics # 诊断插件
 │   ├── KaungMcp.Web                 # 宿主内置网页模块
-│   └── KaungMcp.Plugins.Jewelry     # 珠宝插件、独立数据库与采集任务
+│   ├── KaungMcp.Plugins.Jewelry     # 珠宝插件、独立数据库与采集任务
+│   └── KaungMcp.Plugins.Content     # OCR、文档解析、音频转写
 └── tests
     ├── KaungAgent.Tests
     └── KaungMcp.Tests
@@ -25,7 +26,8 @@ KaungAgent.sln
 - KaungAgent 默认监听 `http://localhost:5090`，通过 MCP Streamable HTTP 调用 KaungMcp。
 - KaungMcp 宿主使用 `data/host.db` 保存配置、客户端、权限、计划、运行与日志；插件数据位于 `data/plugins/{pluginId}`。
 - 采用可信进程内插件与宿主统一调度，安装/升级/卸载通过停止服务后调整目录并重启完成。契约、生命周期与开发模板见 [插件开发](docs/plugins.md)。
-- 本次按全新架构实现，不提供旧数据库和接口迁移。
+- 内容处理插件支持 OCR、PDF/Word/Excel/文本解析、音频转写，提供文件上传、异步任务和管理页测试；引擎部署与工具接口见 [内容处理](docs/content-processing.md)。
+- 当前宿主数据库通过 EF Core 增量 Migration 更新；插件宿主重构之前的旧架构数据库和接口不在兼容范围内。
 
 ## 已实现能力
 
@@ -61,6 +63,7 @@ KaungAgent.sln
 - .NET SDK 10.0.301 或兼容的更新版本。
 - Docker 与 Docker Compose 为可选依赖，用于启动推荐的本地 SearXNG；没有 Docker 或显式禁用 SearXNG 时仍可使用静态 HTML 搜索托底。
 - macOS、Linux 或 Windows。
+- OCR、文档解析和语音转写需要独立内容引擎；推荐使用 Docker Compose 部署，Linux CPU 基线为 4 核、16 GB 内存，详见 [内容处理](docs/content-processing.md)。
 
 还原、编译和测试：
 
@@ -83,7 +86,7 @@ dotnet test KaungAgent.sln
 
 首次启动不需要输入任何内容。脚本会自动生成 KaungMcp 管理员密钥和 KaungAgent API 密钥，随后自动还原和编译项目、启动 KaungMcp、创建本地 MCP 客户端，再启动 KaungAgent 并验证完整调用链。
 
-首次启动会将内置插件复制到 `.kaung/plugins`，后续启动不会恢复已移除插件。网页模块由宿主直接提供；网页搜索工具启用且配置为本地 SearXNG 时准备本地容器，网页读取工具启用且浏览器回退开启时安装与项目版本匹配的 Chromium headless shell。若默认端口 8080 已占用，脚本会自动在 8081–8099 中选择可用端口，不会停止或覆盖原有服务；也可以显式设置 `SEARXNG_PORT`。若已有独立 SearXNG，可在启动前设置 `SEARXNG_ENDPOINT`，此时宿主使用外部端点，脚本不管理其生命周期。
+首次启动会将内置插件（诊断、珠宝、内容处理）复制到 `.kaung/plugins`；已有安装会自动补装新加入的内置插件。脚本通过 `.bundled-plugins` 记录分发状态，不覆盖已有插件包，也不恢复已移除插件。网页模块由宿主直接提供；网页搜索工具启用且配置为本地 SearXNG 时准备本地容器，网页读取工具启用且浏览器回退开启时安装与项目版本匹配的 Chromium headless shell。若默认端口 8080 已占用，脚本会自动在 8081–8099 中选择可用端口，不会停止或覆盖原有服务；也可以显式设置 `SEARXNG_PORT`。若已有独立 SearXNG，可在启动前设置 `SEARXNG_ENDPOINT`，此时宿主使用外部端点，脚本不管理其生命周期。
 
 不希望运行 SearXNG 时，可以直接启动静态搜索托底：
 

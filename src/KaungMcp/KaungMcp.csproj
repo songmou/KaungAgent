@@ -12,5 +12,6 @@
     <ProjectReference Include="../KaungMcp.Plugins.Diagnostics/KaungMcp.Plugins.Diagnostics.csproj" ReferenceOutputAssembly="false" Private="false" />
     <ProjectReference Include="../KaungMcp.Web/KaungMcp.Web.csproj" />
     <ProjectReference Include="../KaungMcp.Plugins.Jewelry/KaungMcp.Plugins.Jewelry.csproj" ReferenceOutputAssembly="false" Private="false" />
+    <ProjectReference Include="../KaungMcp.Plugins.Content/KaungMcp.Plugins.Content.csproj" ReferenceOutputAssembly="false" Private="false" />
   </ItemGroup>
 </Project>

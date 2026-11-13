@@ -10,6 +10,7 @@ using KaungMcp.Plugins;
 using KaungMcp.Plugin;
 using KaungMcp.Foundation;
 using KaungMcp.Scheduling;
+using KaungMcp.Content;
 using KaungMcp.Tools;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.EntityFrameworkCore;
@@ -139,12 +140,16 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddMcpFoundation(builder.Configuration);
 builder.Services.AddWebModule(builder.Configuration);
-var pluginRuntime = PluginRuntime.Discover(builder.Services, builder.Configuration);
-builder.Services.AddSingleton(pluginRuntime);
 builder.Services.AddSingleton<CapabilityRegistry>();
 builder.Services.AddSingleton<SettingsDefinitionService>();
 builder.Services.AddSingleton<SchedulerService>();
 builder.Services.AddSingleton<IPluginTaskService>(services => services.GetRequiredService<SchedulerService>());
+builder.Services.AddSingleton<IPluginJobService>(services => services.GetRequiredService<SchedulerService>());
+builder.Services.AddSingleton<IPluginExecutionContextAccessor, ExecutionContextAccessor>();
+builder.Services.AddSingleton<ContentStateGate>();
+builder.Services.AddSingleton<IContentFileStore, ContentFileStore>();
+var pluginRuntime = PluginRuntime.Discover(builder.Services, builder.Configuration);
+builder.Services.AddSingleton(pluginRuntime);
 if (!builder.Environment.IsEnvironment("Testing")) builder.Services.AddHostedService<ScheduledTaskWorker>();
 builder.Services.Configure<HostOptions>(options => options.ShutdownTimeout = TimeSpan.FromSeconds(125));
 
@@ -219,6 +224,7 @@ app.MapGet("/", () => Results.Content("""
 """, "text/html; charset=utf-8"));
 
 app.MapAdminEndpoints();
+app.MapContentEndpoints();
 app.MapMcp("/mcp").RequireAuthorization(SecurityConstants.McpClientPolicy);
 
 var connectionString = app.Configuration.GetConnectionString("KaungMcp")

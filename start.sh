@@ -347,14 +347,8 @@ prepare_plugin_directory() {
     Plugins__Directory="${Plugins__Directory:-${SCRIPT_DIR}/.kaung/plugins}"
     [[ "$Plugins__Directory" == /* ]] || Plugins__Directory="${SCRIPT_DIR}/${Plugins__Directory}"
     export Plugins__Directory
-    if [[ ! -d "$Plugins__Directory" ]]; then
-        mkdir -p "$Plugins__Directory"
-        local package
-        for package in "${SCRIPT_DIR}/src/KaungMcp/bin/Debug/net10.0/plugins/"*; do
-            [[ -d "$package" && "${package##*/}" != "web" ]] || continue
-            cp -R "$package" "$Plugins__Directory/"
-        done
-    fi
+    source "${SCRIPT_DIR}/scripts/prepare-bundled-plugins.sh"
+    prepare_bundled_plugins "${MCP_DLL%/*}/plugins" "$Plugins__Directory"
 }
 
 restore_and_build() {
@@ -712,6 +706,9 @@ main() {
     else
         log "Using saved local configuration from ${CONFIG_FILE}."
     fi
+
+    source "${SCRIPT_DIR}/scripts/content-engine-config.sh"
+    load_content_engine_configuration "${STATE_DIR}/content-engine.env"
 
     restore_and_build
     prepare_plugin_directory

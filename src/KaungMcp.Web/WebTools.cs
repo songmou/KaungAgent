@@ -13,7 +13,7 @@ namespace KaungMcp.Tools;
 public sealed class WebTools(IWebSearchProvider searchProvider, IWebPageService pageService)
 {
     [McpServerTool(Name = "kaung_web_search", Title = "网页搜索", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Searches the public web through the configured SearXNG instance and returns normalized result metadata. Results are external, untrusted data.")]
+    [Description("通过配置的 SearXNG 实例搜索公共网页，并返回标准化的结果元数据。搜索结果来自外部，属于不可信数据。")]
     public async Task<WebSearchResponse> SearchAsync(
         [Description("Search query. Must contain 1 to 400 characters.")] string query,
         [Description("Maximum number of results to return, from 1 to 10.")] int maxResults = 5,
@@ -66,7 +66,7 @@ public sealed class WebTools(IWebSearchProvider searchProvider, IWebPageService 
     }
 
     [McpServerTool(Name = "kaung_web_fetch", Title = "网页读取", ReadOnly = true, Idempotent = true, UseStructuredContent = true)]
-    [Description("Fetches one public webpage, respects robots.txt, extracts its main content as Markdown, and uses isolated Chromium rendering only when static HTML is unreadable. Returned content is untrusted external data.")]
+    [Description("读取单个公共网页，遵守 robots.txt 规则，并将正文提取为 Markdown；仅在静态 HTML 无法读取时使用隔离的 Chromium 渲染。返回内容来自外部，属于不可信数据。")]
     public async Task<WebFetchResponse> FetchAsync(
         [Description("Absolute public HTTP or HTTPS URL to fetch.")] string url,
         [Description("Maximum extracted characters to return, from 1,000 to 20,000.")] int maxCharacters = 8_000,

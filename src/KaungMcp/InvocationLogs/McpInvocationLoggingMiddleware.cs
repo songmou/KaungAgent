@@ -54,7 +54,8 @@ public sealed class McpInvocationLoggingMiddleware(
                 var (errorCode, errorMessage) = ClassifyFailure(body, failure ?? toolException, context.Response.StatusCode);
                 await logs.WriteAsync(clientId, request.Method, request.Target, started,
                     timer.ElapsedMilliseconds, errorCode is null, errorCode, errorMessage,
-                    request.Parameters, body);
+                    request.Parameters, body, correlationId:
+                    context.Items[KaungMcp.Content.ExecutionContextAccessor.SubmittedJobCorrelationKey] as string);
             }
             catch (Exception exception)
             {

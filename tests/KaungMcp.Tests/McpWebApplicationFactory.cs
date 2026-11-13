@@ -18,7 +18,8 @@ public sealed class McpWebApplicationFactory(
     Action<IConfigurationBuilder>? configureConfiguration = null) : WebApplicationFactory<KaungMcpApplicationMarker>
 {
     private static readonly System.Reflection.Assembly[] SharedPluginAssemblies =
-        [typeof(KaungMcp.Plugins.Jewelry.JewelryPlugin).Assembly, typeof(KaungMcp.Plugins.Diagnostics.DiagnosticsPlugin).Assembly];
+        [typeof(KaungMcp.Plugins.Jewelry.JewelryPlugin).Assembly, typeof(KaungMcp.Plugins.Diagnostics.DiagnosticsPlugin).Assembly,
+            typeof(KaungMcp.Plugins.Content.ContentPlugin).Assembly];
     public const string AdminKey = "test-admin-key-that-is-at-least-32-characters";
 
     public string DatabasePath { get; } = databasePath ?? Path.Combine(
@@ -60,6 +61,7 @@ public sealed class McpWebApplicationFactory(
                 ["WebTools:SearchEnabled"] = (!jewelryOnly && codeDirectory is null && (pluginIds is null || pluginIds.Contains("web"))).ToString(),
                 ["WebTools:FetchEnabled"] = (!jewelryOnly && codeDirectory is null && (pluginIds is null || pluginIds.Contains("web"))).ToString(),
                 ["Plugins:DataDirectory"] = DatabasePath + ".plugins",
+                ["Content:FilesDirectory"] = DatabasePath + ".files",
                 ["Plugins:ShareLoadedAssemblies"] = shareLoadedAssemblies.ToString(),
                 ["AllowedHosts"] = "*",
                 ["ConnectionStrings:KaungMcp"] = $"Data Source={DatabasePath};Default Timeout=30"
@@ -98,6 +100,7 @@ public sealed class McpWebApplicationFactory(
         }
 
         if (Directory.Exists(DatabasePath + ".plugins")) Directory.Delete(DatabasePath + ".plugins", true);
+        if (Directory.Exists(DatabasePath + ".files")) Directory.Delete(DatabasePath + ".files", true);
         if (Directory.Exists(DatabasePath + ".code")) Directory.Delete(DatabasePath + ".code", true);
         foreach (var path in new[] { DatabasePath, $"{DatabasePath}-wal", $"{DatabasePath}-shm",
                      DatabasePath + ".settings.json", DatabasePath + ".local.env", DatabasePath + ".lan.pfx" })

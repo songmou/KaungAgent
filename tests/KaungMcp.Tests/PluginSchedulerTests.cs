@@ -51,7 +51,7 @@ public sealed class PluginSchedulerTests
         Assert.Equal(2, remaining.Count);
         Assert.Contains(remaining, p => p.Name == "用户修改" && !p.IsEnabled);
         await using var db = await Database(factory).CreateDbContextAsync();
-        Assert.Equal(3, await db.ScheduledTasks.CountAsync());
+        Assert.Equal(3, await db.ScheduledTasks.CountAsync(p => p.PluginId == "jewelry"));
         Assert.Single(await db.ScheduledTasks.Where(p => p.IsDeleted).ToListAsync());
     }
     [Fact]

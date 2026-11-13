@@ -20,6 +20,14 @@ public static class FoundationServices
         services.AddSingleton<PublicWebAddressPolicy>();
 
         services.AddSingleton<ISafeHttpFetcher, SafeHttpFetcher>();
+        services.AddSingleton<ISafeBinaryDownloader, SafeBinaryDownloader>();
+        services.AddHttpClient("BinaryDownload", client => client.Timeout = Timeout.InfiniteTimeSpan)
+            .ConfigurePrimaryHttpMessageHandler(services => new SocketsHttpHandler
+            {
+                AllowAutoRedirect = false, AutomaticDecompression = DecompressionMethods.All,
+                ConnectCallback = services.GetRequiredService<PublicWebAddressPolicy>().ConnectAsync,
+                UseProxy = false, UseCookies = false, ConnectTimeout = TimeSpan.FromSeconds(30)
+            });
         services.AddSingleton<IRobotsPolicy, RobotsPolicy>();
         services.AddHttpClient("WebFetch")
             .ConfigureHttpClient((services, client) =>

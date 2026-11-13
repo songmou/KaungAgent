@@ -36,6 +36,7 @@ function switchTab(name) {
   if (name === 'tools') run(loadTools);
   if (name === 'plugins') run(loadPlugins);
   if (name === 'web') run(loadWeb);
+  if (name === 'content') run(loadContent);
   if (name === 'records') loadRecords();
   if (name === 'scheduler') run(loadScheduler);
 

@@ -17,6 +17,7 @@
     <ProjectReference Include="../../src/KaungMcp.Web/KaungMcp.Web.csproj" />
     <ProjectReference Include="../../src/KaungMcp.Plugins.Jewelry/KaungMcp.Plugins.Jewelry.csproj" />
     <ProjectReference Include="../../src/KaungMcp.Plugins.Diagnostics/KaungMcp.Plugins.Diagnostics.csproj" />
+    <ProjectReference Include="../../src/KaungMcp.Plugins.Content/KaungMcp.Plugins.Content.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Update="Fixtures/Jewelry/**/*" CopyToOutputDirectory="PreserveNewest" />

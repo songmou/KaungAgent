@@ -32,7 +32,10 @@ public sealed class ScheduledTask
 public sealed class TaskRun
 {
     public Guid Id { get; set; } = Guid.NewGuid();
-    public Guid TaskId { get; set; }
+    public Guid? TaskId { get; set; }
+    public string? SubmitterKind { get; set; }
+    public string? SubmitterId { get; set; }
+    public string? InputFileId { get; set; }
     public string PluginId { get; set; } = "";
     public string PluginVersion { get; set; } = "";
     public string TargetType { get; set; } = "";
@@ -85,7 +88,7 @@ public sealed record ScheduledTaskView(Guid Id, string Name, string PluginId, st
     public string? OwnerName { get; init; }
     public string? TargetName { get; init; }
 }
-public sealed record TaskRunView(Guid Id, Guid TaskId, string PluginId, string PluginVersion, string TargetType,
+public sealed record TaskRunView(Guid Id, Guid? TaskId, string PluginId, string PluginVersion, string TargetType,
     string TargetId, int DefinitionVersion, JsonElement Arguments, string Trigger, DateTimeOffset? PlannedAtUtc,
     DateTimeOffset CreatedAtUtc, DateTimeOffset? StartedAtUtc, DateTimeOffset? CompletedAtUtc, DateTimeOffset? RetryAtUtc,
     string Status, int Attempt, bool CancelRequested, string CorrelationId, string? Summary, JsonElement? Result,

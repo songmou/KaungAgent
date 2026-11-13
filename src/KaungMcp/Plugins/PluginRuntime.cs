@@ -288,7 +288,7 @@ public sealed class PluginRuntime
     }
     public object Definitions(string id) => new
     {
-        tasks = plugins.GetValueOrDefault(id)?.Registration?.Tasks.Select(t => new { t.Id, t.Name, t.ParameterSchema, t.Version, t.DefaultTimeoutSeconds, t.Idempotent, t.MaxTimeoutSeconds }).ToArray(),
+        tasks = plugins.GetValueOrDefault(id)?.Registration?.Tasks.Select(t => new { t.Id, t.Name, t.ParameterSchema, t.Version, t.DefaultTimeoutSeconds, t.Idempotent, t.MaxTimeoutSeconds, t.AllowOneOff }).ToArray(),
         templates = plugins.GetValueOrDefault(id)?.Registration?.DefaultTasks,
         settings = plugins.GetValueOrDefault(id)?.Registration?.ConfigurationProviders.SelectMany(p => p.Settings).ToArray()
     };

@@ -15,3 +15,8 @@ textarea{font:inherit}.field textarea,.tool-param-field input,.tool-param-field 
 .sidebar,.sidebar nav{min-width:0}.sidebar nav{max-width:100%}
 @media(max-width:900px){.shell{grid-template-columns:minmax(0,1fr)}}
 @media(max-width:700px){.table-wrap .records-table{min-width:0;table-layout:auto}.records-table thead{display:none}.records-table tbody,.records-table tr{display:grid}.records-table tr{padding:10px 0;border-bottom:1px solid #e3eae4}.records-table td{display:block;border:0;padding:9px 0}.records-table td:not([colspan]):before{display:block;font-size:11px;color:#748078;margin-bottom:5px}.records-table td:nth-child(1):not([colspan]):before{content:"时间 / 耗时"}.records-table td:nth-child(2):before{content:"所属 / 目标"}#runs .records-table td:nth-child(3):before{content:"状态 / 触发"}#logs .records-table td:nth-child(3):before{content:"来源 / 客户端"}.records-table td:nth-child(4):before{content:"结果摘要"}.records-table td:last-child .button{width:100%}.records-table .summary-cell{max-width:none}}
+:root { --content-gap: 16px; }
+.content-fields { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: var(--content-gap); margin-bottom: 16px; }
+.content-fields label, #content-upload > label { display: flex; flex-direction: column; gap: 8px; }
+.content-output { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 12px 0; border-bottom: 1px solid var(--border, #e2e8f0); }
+.content-text { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 600px; overflow: auto; }

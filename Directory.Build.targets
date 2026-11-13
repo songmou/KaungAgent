@@ -1,6 +1,9 @@
 <Project>
   <Target Name="CollectBundledPlugins">
     <ItemGroup>
+      <BundledPluginFile Include="$(MSBuildThisFileDirectory)src/KaungMcp.Plugins.Content/bin/$(Configuration)/$(TargetFramework)/**/*">
+        <PluginId>content</PluginId>
+      </BundledPluginFile>
       <BundledPluginFile Include="$(MSBuildThisFileDirectory)src/KaungMcp.Plugins.Diagnostics/bin/$(Configuration)/$(TargetFramework)/**/*">
         <PluginId>diagnostics</PluginId>
       </BundledPluginFile>

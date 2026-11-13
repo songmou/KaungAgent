@@ -2,6 +2,7 @@ using KaungMcp.Data.Entities;
 using KaungMcp.InvocationLogs;
 using KaungMcp.Scheduling;
 using KaungMcp.Plugins;
+using KaungMcp.Content;
 using Microsoft.EntityFrameworkCore;
 
 namespace KaungMcp.Data;
@@ -15,9 +16,17 @@ public sealed class KaungMcpDbContext(DbContextOptions<KaungMcpDbContext> option
     public DbSet<ScheduledTask> ScheduledTasks => Set<ScheduledTask>();
     public DbSet<TaskRun> TaskRuns => Set<TaskRun>();
     public DbSet<PluginState> PluginStates => Set<PluginState>();
+    public DbSet<StoredContentFile> ContentFiles => Set<StoredContentFile>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        var file = modelBuilder.Entity<StoredContentFile>();
+        file.ToTable("ContentFiles");
+        file.HasKey(f => f.Id);
+        file.HasIndex(f => new { f.OwnerKind, f.OwnerId, f.ExpiresTicks });
+        file.HasIndex(f => f.ExpiresTicks);
+        modelBuilder.Entity<TaskRun>().HasIndex(r => new { r.SubmitterKind, r.SubmitterId, r.CreatedTicks });
+        modelBuilder.Entity<TaskRun>().HasIndex(r => r.InputFileId);
         var scheduledTask = modelBuilder.Entity<ScheduledTask>();
         scheduledTask.ToTable("ScheduledTasks");
         scheduledTask.HasKey(x => x.Id);

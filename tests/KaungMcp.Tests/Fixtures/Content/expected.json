@@ -1,0 +1,5 @@
+{
+  "ocr": "Kaung 内容处理测试\n订单编号 KAUNG2026\n数量 12 金额 1280.50\n本地识别 中文 English",
+  "speechZh": "今天我们测试本地语音识别功能。所有文件都在本地处理。识别完成以后，我们可以查看文字和时间戳。",
+  "speechEn": "Today we are testing local speech recognition. All files are processed locally. After recognition is complete, we can read the text and check the timestamps."
+}

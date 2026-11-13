@@ -27,7 +27,10 @@ public sealed class PluginRegistrationContext(IServiceCollection services, IConf
 public sealed record PluginInitializationContext(IServiceProvider Services, string DataDirectory);
 public sealed record PluginToolPolicy(string Name, bool Schedulable = false, bool ClientVisible = true, bool SanitizeErrors = false, Type? ScheduleValidatorType = null);
 public sealed record PluginTaskDefinition(string Id, string Name, Type HandlerType, JsonElement ParameterSchema,
-    int Version = 1, int DefaultTimeoutSeconds = 300, bool Idempotent = false, int MaxTimeoutSeconds = 86400);
+    int Version = 1, int DefaultTimeoutSeconds = 300, bool Idempotent = false, int MaxTimeoutSeconds = 86400)
+{
+    public bool AllowOneOff { get; init; }
+}
 public sealed record DefaultTaskTemplate(string Id, string Name, string HandlerId, JsonElement Arguments,
     int IntervalMinutes, bool IsEnabled = true, string TimeZoneId = "Asia/Shanghai", string ScheduleType = "interval", string? CronExpression = null);
 public sealed record PluginScheduleInfo(Guid Id, string PluginId, string TargetType, string TargetId,

@@ -10,6 +10,7 @@
   <script src="/admin/scheduler.js" defer></script>
   <script src="/admin/plugins.js" defer></script>
   <script src="/admin/configuration.js" defer></script>
+  <script src="/admin/content.js" defer></script>
 </head>
 <body>
   <div id="login" class="login-shell">
@@ -29,6 +30,7 @@
       <nav aria-label="管理导航">
         <button data-tab="overview" class="active">概览</button>
         <button data-tab="web">网页能力</button>
+        <button data-tab="content">内容处理</button>
         <button data-tab="plugins">插件管理</button>
         <button data-tab="tools">工具管理</button>
         <button data-tab="scheduler">定时任务</button>
@@ -44,6 +46,7 @@
       <section id="overview" class="view"></section>
       <section id="plugins" class="view hidden"></section>
       <section id="web" class="view hidden"></section>
+      <section id="content" class="view hidden"></section>
       <section id="records" class="view hidden"><div class="page-head"><div><h1>执行记录</h1><p>查看任务运行和请求调用，按所属能力或插件追踪执行。</p></div></div><div id="record-tabs"></div><section id="runs"></section><section id="logs" class="hidden"></section></section>
       <section id="tools" class="view hidden"></section>
       <section id="scheduler" class="view hidden"></section>

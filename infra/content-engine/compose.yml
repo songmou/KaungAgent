@@ -1,0 +1,31 @@
+name: kaung-content
+services:
+  engine:
+    build: .
+    image: kaung-content-engine:1.0.0
+    ports:
+      - "127.0.0.1:${CONTENT_ENGINE_PORT:-8092}:8092"
+    environment:
+      ENGINE_KEY: ${CONTENT_ENGINE_KEY:?Export a random CONTENT_ENGINE_KEY of at least 32 characters}
+      MODEL_DIR: /models
+      HF_HOME: /models/huggingface
+    volumes:
+      - models:/models
+    read_only: true
+    tmpfs:
+      - /tmp:size=2g,mode=1777
+      - /home/engine/.cache:size=128m,uid=10001,gid=10001
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 12g
+    cpus: 4
+    pids_limit: 128
+    init: true
+    restart: unless-stopped
+    healthcheck:
+      test: [CMD, python, -c, "import json,os,urllib.request as u; h={'X-Engine-Key':os.environ['ENGINE_KEY']}; assert all(json.load(u.urlopen(u.Request('http://127.0.0.1:8092/v1/health/'+c,headers=h),timeout=3))['ready'] for c in ('ocr','document','speech'))"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+volumes:
+  models:

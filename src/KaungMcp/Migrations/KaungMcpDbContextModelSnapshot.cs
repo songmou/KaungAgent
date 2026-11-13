@@ -17,6 +17,52 @@ namespace KaungMcp.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.12");
 
+            modelBuilder.Entity("KaungMcp.Content.StoredContentFile", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("CreatedTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("ExpiresTicks")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MimeType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("OwnerKind")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PluginId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("Size")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("StorageKey")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ExpiresTicks");
+
+                    b.HasIndex("OwnerKind", "OwnerId", "ExpiresTicks");
+
+                    b.ToTable("ContentFiles", (string)null);
+                });
+
             modelBuilder.Entity("KaungMcp.Data.Entities.McpClientApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -339,6 +385,9 @@ namespace KaungMcp.Migrations
                     b.Property<string>("Error")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("InputFileId")
+                        .HasColumnType("TEXT");
+
                     b.Property<long?>("InvocationLogId")
                         .HasColumnType("INTEGER");
 
@@ -376,6 +425,12 @@ namespace KaungMcp.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("SubmitterId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SubmitterKind")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Summary")
                         .HasColumnType("TEXT");
 
@@ -387,7 +442,7 @@ namespace KaungMcp.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.Property<Guid>("TaskId")
+                    b.Property<Guid?>("TaskId")
                         .HasColumnType("TEXT");
 
                     b.Property<int>("TimeoutSeconds")
@@ -400,12 +455,16 @@ namespace KaungMcp.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("InputFileId");
+
                     b.HasIndex("Status", "RetryAtTicks");
 
                     b.HasIndex("TaskId", "PlannedTicks")
                         .IsUnique();
 
                     b.HasIndex("TaskId", "StartedTicks");
+
+                    b.HasIndex("SubmitterKind", "SubmitterId", "CreatedTicks");
 
                     b.ToTable("TaskRuns", (string)null);
                 });
@@ -425,8 +484,7 @@ namespace KaungMcp.Migrations
                     b.HasOne("KaungMcp.Scheduling.ScheduledTask", null)
                         .WithMany()
                         .HasForeignKey("TaskId")
-                        .OnDelete(DeleteBehavior.Restrict)
-                        .IsRequired();
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("KaungMcp.Data.Entities.McpClientApplication", b =>

@@ -42,7 +42,7 @@ data/plugins/{pluginId}/plugin.db
 data/plugins/{pluginId}/artifacts/
 ```
 
-`Plugins:Directory` 默认相对宿主程序集目录解析；`Plugins:DataDirectory` 默认 `data/plugins`，相对工作目录解析。生产部署推荐绝对路径。启动脚本首次复制内置插件到 `.kaung/plugins`，之后使用该独立安装目录，重新构建不会恢复已卸载插件。
+`Plugins:Directory` 默认相对宿主程序集目录解析；`Plugins:DataDirectory` 默认 `data/plugins`，相对工作目录解析。生产部署推荐绝对路径。启动脚本首次复制内置插件（诊断、珠宝、内容处理）到 `.kaung/plugins`，之后使用该独立安装目录。后续启动会补装新增内置插件，并通过安装目录内的 `.bundled-plugins` 记录分发状态；已有插件包不会被覆盖，已卸载插件不会恢复。旧安装首次升级会补装内容插件，同时保留此前诊断和珠宝插件的卸载状态。请保留该状态文件。
 
 启动依次执行清单校验、程序集加载、注册项与能力冲突检查、数据库和依赖初始化，最后开放 MCP 和调度。失败插件在管理页显示错误，其他插件继续启动。清单 ID 必须与目录名一致，契约版本首版为 `1`。
 
@@ -91,7 +91,7 @@ dotnet publish templates/KaungMcp.Plugin.Sample -c Release -o .kaung/plugins/sam
 
 `IPluginConfigurationProvider` 定义配置名称、默认值、是否即时生效与校验。配置定义保留 `(Key, Name, DefaultValue, Runtime)` 构造函数；可选属性 `GroupId`、`GroupName`、`Description`、`Type`（text/bool/number/url/select）、`Unit`、`Minimum`、`Maximum`、`Step`、`Options`、`ReadOnlyReason` 用于通用表单。旧插件未声明元数据时使用常规分组和文本控件。服务端仍执行类型、范围、选项和插件业务校验。动态配置通过 Foundation 的 `ManagedSettingsStore.GetOptions<T>` 读取；`IOptions<T>` 用于需重启的配置。配置保存在宿主数据库中，并在插件卸载后保留。`IPluginHealthCheck` 用于依赖检查，管理目录缓存健康状态 30 秒。
 
-后续 OCR 和文件解析按同样方式注册识别/解析工具、批处理任务及清理任务；实际引擎、文件格式、输入路径规则和默认计划另行实现。
+内容处理插件已实现 OCR、文档解析、音频转写和每日过期清理，见 [内容处理](content-processing.md)。一次性任务使用 `IPluginJobService`，复用宿主队列且无需保存周期计划；处理器须设置 `PluginTaskDefinition.AllowOneOff=true`。文件、任务及产物身份通过 `IPluginExecutionContextAccessor` 由宿主建立并恢复，插件不能从用户参数接受拥有者身份。统一文件流接口为 `IContentFileStore`。
 
 ## 网页模块与管理接口
 

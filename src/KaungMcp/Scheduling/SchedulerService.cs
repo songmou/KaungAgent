@@ -8,6 +8,8 @@ using KaungMcp.Plugin;
 using KaungMcp.Plugins;
 using KaungMcp.Capabilities;
 using KaungMcp.Tools;
+using KaungMcp.Content;
+using KaungMcp.Configuration;
 using Microsoft.EntityFrameworkCore;
 
 namespace KaungMcp.Scheduling;
@@ -18,7 +20,7 @@ public sealed class SchedulerService(
     PluginRuntime plugins,
     TimeProvider clock,
     IConfiguration configuration,
-    ILogger<SchedulerService> logger) : IPluginTaskService
+    ILogger<SchedulerService> logger) : IPluginTaskService, IPluginJobService
 {
     private CapabilityRegistry Capabilities => services.GetRequiredService<CapabilityRegistry>();
     private readonly SemaphoreSlim writes = new(1, 1);
@@ -79,7 +81,7 @@ public sealed class SchedulerService(
             foreach (var run in await db.TaskRuns.Where(r => r.Status == "running").ToListAsync(ct))
             {
                 run.Status = "interrupted"; run.CompletedTicks = now.UtcTicks; run.Error = "服务在执行期间重启，未自动重放。";
-                var owner = await db.ScheduledTasks.FindAsync([run.TaskId], ct);
+                var owner = run.TaskId is { } taskId ? await db.ScheduledTasks.FindAsync([taskId], ct) : null;
                 if (owner is not null) owner.LastRunStatus = run.Status;
             }
             foreach (var plugin in plugins.Plugins.Where(p => plugins.Available(p.Manifest.Id)))
@@ -279,7 +281,7 @@ public sealed class SchedulerService(
                 plan.NextRunTicks = plan.IsEnabled && plan.BlockedReason is null ? Next(Schedule(plan), clock.GetUtcNow()).UtcTicks : null;
             }
             foreach (var queued in await db.TaskRuns.Where(r => r.PluginId == pluginId && r.Status == "queued" && (toolName == null || r.TargetId == toolName)).ToListAsync(ct))
-                if (!Capabilities.Available(pluginId) || (await db.ScheduledTasks.FindAsync([queued.TaskId], ct))?.BlockedReason is not null) CancelQueued(queued, "所属能力或工具已停用或不可用。");
+                if (!Capabilities.Available(pluginId) || queued.TaskId != null && (await db.ScheduledTasks.FindAsync([queued.TaskId.Value], ct))?.BlockedReason is not null) CancelQueued(queued, "所属能力或工具已停用或不可用。");
             await db.SaveChangesAsync(ct);
         }
         finally { writes.Release(); }
@@ -362,6 +364,75 @@ public sealed class SchedulerService(
         finally { writes.Release(); }
         await DispatchAsync(ct);
     }
+    private static ExecutionIdentity RunIdentity(TaskRun run) =>
+        new(run.SubmitterKind ?? "system", run.SubmitterId ?? "scheduler");
+
+    private async Task<TargetInfo> ValidateOneOffAsync(TaskRun run, CancellationToken ct)
+    {
+        var definition = plugins.TaskDefinition(run.PluginId, run.TargetId);
+        if (definition?.AllowOneOff != true || definition.Version != run.DefinitionVersion ||
+            run.PluginVersion != Capabilities.Version(run.PluginId))
+            throw new ArgumentException("一次性任务定义或插件版本已改变。");
+        return await ValidateTargetAsync(new("一次性任务", run.PluginId, "handler", run.TargetId,
+            Parse(run.ArgumentsJson), ScheduleType: "once", IntervalMinutes: null), null, ct);
+    }
+
+    public async Task<Guid> SubmitJobAsync(string pluginId, string handlerId, JsonElement arguments, CancellationToken ct)
+    {
+        var identity = services.GetRequiredService<IPluginExecutionContextAccessor>().Current;
+        var gate = services.GetRequiredService<ContentStateGate>();
+        await gate.Mutex.WaitAsync(ct);
+        try
+        {
+            await writes.WaitAsync(ct);
+            try
+            {
+                if (stopping) throw new ContentConflictException("服务正在停止。");
+                var definition = plugins.TaskDefinition(pluginId, handlerId);
+                if (definition?.AllowOneOff != true) throw new ArgumentException("处理器未开放一次性执行。");
+                var run = new TaskRun { PluginId = pluginId, PluginVersion = Capabilities.Version(pluginId) ?? "unknown",
+                    TargetType = "handler", TargetId = handlerId, DefinitionVersion = definition.Version,
+                    ArgumentsJson = arguments.GetRawText(), Trigger = identity.Kind == "client" ? "mcp" : "admin",
+                    SubmitterKind = identity.Kind, SubmitterId = identity.Id, CreatedTicks = clock.GetUtcNow().UtcTicks,
+                    TimeoutSeconds = Math.Min(definition.MaxTimeoutSeconds,
+                        services.GetRequiredService<ManagedSettingsStore>().GetOptions<ContentOptions>("Content").JobTimeoutSeconds) };
+                if (arguments.TryGetProperty("fileId", out var file))
+                {
+                    run.InputFileId = file.GetString();
+                    await services.GetRequiredService<IContentFileStore>().GetAsync(run.InputFileId!, ct);
+                }
+                await ValidateOneOffAsync(run, ct);
+                await using var db = await database.CreateDbContextAsync(ct);
+                // Persist while holding the same gate used by deletion and expiry cleanup.
+                db.TaskRuns.Add(run);
+                await db.SaveChangesAsync(ct);
+                if (services.GetService<IHttpContextAccessor>()?.HttpContext is { } http)
+                    http.Items[ExecutionContextAccessor.SubmittedJobCorrelationKey] = run.CorrelationId;
+                return run.Id;
+            }
+            finally { writes.Release(); }
+        }
+        finally { gate.Mutex.Release(); }
+    }
+    private async Task<TaskRun> OwnedJobAsync(Guid jobId, CancellationToken ct)
+    {
+        var identity = services.GetRequiredService<IPluginExecutionContextAccessor>().Current;
+        await using var db = await database.CreateDbContextAsync(ct);
+        var run = await db.TaskRuns.AsNoTracking().SingleOrDefaultAsync(r => r.Id == jobId && r.TaskId == null, ct);
+        if (run is null || !identity.IsAdministrator && (run.SubmitterKind != identity.Kind || run.SubmitterId != identity.Id))
+            throw new KeyNotFoundException("任务不存在。");
+        return run;
+    }
+    private static ContentJobInfo JobView(TaskRun run) => new(run.Id, run.Status, run.Summary, run.Error,
+        run.ResultJson is null ? null : Parse(run.ResultJson), At(run.CreatedTicks), At(run.CompletedTicks), run.CancelRequested);
+    public async Task<ContentJobInfo> GetJobAsync(Guid jobId, CancellationToken ct) => JobView(await OwnedJobAsync(jobId, ct));
+    public async Task<ContentJobInfo> CancelJobAsync(Guid jobId, CancellationToken ct)
+    {
+        await OwnedJobAsync(jobId, ct);
+        await CancelAsync(jobId, ct);
+        return await GetJobAsync(jobId, ct);
+    }
+
     public async Task DispatchAsync(CancellationToken ct)
     {
         await dispatch.WaitAsync(ct);
@@ -386,9 +457,16 @@ public sealed class SchedulerService(
                 IReadOnlyList<string> keys = [];
                 try
                 {
-                    var plan = await db.ScheduledTasks.AsNoTracking().SingleAsync(p => p.Id == run.TaskId, ct);
-                    var change = Change(plan) with { Arguments = Parse(run.ArgumentsJson), ConfirmRisk = run.RiskConfirmed };
-                    var info = await ValidateTargetAsync(change, plan.Id, ct); keys = info.Keys;
+                    using var identity = services.GetRequiredService<IPluginExecutionContextAccessor>().Push(RunIdentity(run));
+                    TargetInfo info;
+                    if (run.TaskId is { } taskId)
+                    {
+                        var plan = await db.ScheduledTasks.AsNoTracking().SingleAsync(p => p.Id == taskId, ct);
+                        var change = Change(plan) with { Arguments = Parse(run.ArgumentsJson), ConfirmRisk = run.RiskConfirmed };
+                        info = await ValidateTargetAsync(change, plan.Id, ct);
+                    }
+                    else info = await ValidateOneOffAsync(run, ct);
+                    keys = info.Keys;
                     if (resourceLocks.Overlaps(keys)) continue;
                 }
                 catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -413,10 +491,12 @@ public sealed class SchedulerService(
                 await using var db = await database.CreateDbContextAsync();
                 run = await db.TaskRuns.SingleAsync(r => r.Id == id);
                 if (run.Status != "queued") return;
-                var plan = await db.ScheduledTasks.SingleAsync(p => p.Id == run.TaskId);
-                var blocked = await BlockReasonAsync(plan, CancellationToken.None);
-                if (plan.IsDeleted || run.Trigger == "scheduled" && !plan.IsEnabled || blocked is not null ||
-                    run.DefinitionVersion != plan.DefinitionVersion || run.RiskSnapshot != plan.RiskSnapshot ||
+                using var validationIdentity = services.GetRequiredService<IPluginExecutionContextAccessor>().Push(RunIdentity(run));
+                var plan = run.TaskId is { } taskId ? await db.ScheduledTasks.SingleAsync(p => p.Id == taskId) : null;
+                var blocked = plan is null ? null : await BlockReasonAsync(plan, CancellationToken.None);
+                if (plan is null) await ValidateOneOffAsync(run, CancellationToken.None);
+                if (plan is not null && (plan.IsDeleted || run.Trigger == "scheduled" && !plan.IsEnabled || blocked is not null ||
+                    run.DefinitionVersion != plan.DefinitionVersion || run.RiskSnapshot != plan.RiskSnapshot) ||
                     Capabilities.Version(run.PluginId) != run.PluginVersion)
                 {
                     run.Status = "skipped"; run.Error = blocked ?? "计划或插件版本已改变。"; run.CompletedTicks = clock.GetUtcNow().UtcTicks;
@@ -431,6 +511,7 @@ public sealed class SchedulerService(
             using var activity = new Activity("plugin.task").SetIdFormat(ActivityIdFormat.W3C).Start();
             activity.SetTag("task.correlation_id", run.CorrelationId);
             await using var scope = services.CreateAsyncScope();
+            using var executionIdentity = services.GetRequiredService<IPluginExecutionContextAccessor>().Push(RunIdentity(run));
             PluginTaskResult result;
             long? logId = null;
             try
@@ -480,11 +561,13 @@ public sealed class SchedulerService(
         }
     }
     private Task<long?> WriteAttemptLogAsync(TaskRun run, string status, PluginTaskResult result, IServiceProvider scope) =>
-        scope.GetRequiredService<McpInvocationLogService>().WriteAsync(null,
+        scope.GetRequiredService<McpInvocationLogService>().WriteAsync(
+            run.SubmitterKind == "client" && Guid.TryParse(run.SubmitterId, out var clientId) ? clientId : null,
             run.TargetType == "handler" ? "tasks/execute" : "tools/call", run.PluginId + "/" + run.TargetId,
             At(run.StartedTicks!.Value), (long)(clock.GetUtcNow() - At(run.StartedTicks.Value)).TotalMilliseconds,
             status == "succeeded", status == "succeeded" ? null : status, result.Error, run.ArgumentsJson,
-            JsonSerializer.Serialize(new { run.Attempt, status, result }, Json), InvocationSources.Scheduler, run.CorrelationId, run.PluginId, Capabilities.Kind(run.PluginId));
+            JsonSerializer.Serialize(new { run.Attempt, status, result }, Json), run.TaskId is not null ? InvocationSources.Scheduler :
+                run.SubmitterKind == "client" ? InvocationSources.McpClient : InvocationSources.AdminTest, run.CorrelationId, run.PluginId, Capabilities.Kind(run.PluginId));
     private async Task CompleteAttemptAsync(TaskRun snapshot, string status, PluginTaskResult result, long? logId)
     {
         await writes.WaitAsync();
@@ -501,7 +584,8 @@ public sealed class SchedulerService(
                 run.Status = "queued"; run.RetryAtTicks = clock.GetUtcNow().AddSeconds(run.Attempt == 1 ? 30 : 120).UtcTicks;
             }
             else { run.Status = status; run.CompletedTicks = clock.GetUtcNow().UtcTicks; run.RetryAtTicks = null; }
-            var plan = await db.ScheduledTasks.FindAsync(run.TaskId); if (plan is not null) plan.LastRunStatus = run.Status;
+            var plan = run.TaskId is { } taskId ? await db.ScheduledTasks.FindAsync(taskId) : null;
+            if (plan is not null) plan.LastRunStatus = run.Status;
             await db.SaveChangesAsync();
         }
         finally { writes.Release(); }
@@ -514,7 +598,8 @@ public sealed class SchedulerService(
             await using var db = await database.CreateDbContextAsync(ct);
             var run = await db.TaskRuns.FindAsync([id], ct); if (run is null) return;
             run.Status = status; run.CompletedTicks = clock.GetUtcNow().UtcTicks; run.Summary = summary; run.Error = error; run.ResultJson = result; run.InvocationLogId = logId;
-            var plan = await db.ScheduledTasks.FindAsync([run.TaskId], ct); if (plan is not null) plan.LastRunStatus = status;
+            var plan = run.TaskId is { } taskId ? await db.ScheduledTasks.FindAsync([taskId], ct) : null;
+            if (plan is not null) plan.LastRunStatus = status;
             await db.SaveChangesAsync(ct);
         }
         finally { writes.Release(); }
@@ -587,7 +672,7 @@ public sealed class SchedulerService(
         var planIds = runs.Select(r => r.TaskId).Distinct().ToArray();
         var names = await db.ScheduledTasks.Where(p => planIds.Contains(p.Id)).ToDictionaryAsync(p => p.Id, p => p.Name, ct);
         var owners = await db.PluginStates.AsNoTracking().ToDictionaryAsync(p => p.Id, p => p.Name, ct);
-        return new(runs.Select(r => View(r) with { TaskName = names.GetValueOrDefault(r.TaskId), OwnerName = owners.GetValueOrDefault(r.PluginId, Capabilities.Name(r.PluginId)) }).ToArray(), page, pageSize, count);
+        return new(runs.Select(r => View(r) with { TaskName = r.TaskId is { } taskId ? names.GetValueOrDefault(taskId) : Capabilities.TargetName(r.PluginId, r.TargetId), OwnerName = owners.GetValueOrDefault(r.PluginId, Capabilities.Name(r.PluginId)) }).ToArray(), page, pageSize, count);
     }
     public async Task<TaskRunView?> RunDetailAsync(Guid id, CancellationToken ct)
     {

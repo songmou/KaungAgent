@@ -1,0 +1,35 @@
+name: Content model acceptance (Linux CPU)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  models:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Linux x64 CPU engine
+        run: docker build --platform linux/amd64 -t kaung-content-engine:acceptance infra/content-engine
+      - name: Prepare model cache and reports
+        run: mkdir -p "$RUNNER_TEMP/content-models" "$RUNNER_TEMP/content-reports" && chmod 777 "$RUNNER_TEMP/content-models" "$RUNNER_TEMP/content-reports"
+      - uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/content-models
+          key: content-models-${{ hashFiles('infra/content-engine/requirements.lock', 'infra/content-engine/model-sources.json') }}
+      - name: Prefetch pinned models
+        run: docker run --rm -v "$RUNNER_TEMP/content-models:/models" kaung-content-engine:acceptance python prefetch.py
+      - name: Test with external networking disabled
+        run: >-
+          docker run --rm --network none --cpus 4 --memory 12g
+          -v "$RUNNER_TEMP/content-models:/models:ro"
+          -v "$PWD:/work:ro"
+          -v "$RUNNER_TEMP/content-reports:/reports"
+          kaung-content-engine:acceptance python /work/infra/content-engine/smoke.py
+          --fixtures /work/tests/KaungMcp.Tests/Fixtures/Content
+          --report /reports/linux-cpu.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: content-model-acceptance
+          path: ${{ runner.temp }}/content-reports

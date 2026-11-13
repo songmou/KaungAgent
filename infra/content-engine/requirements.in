@@ -1,0 +1,14 @@
+# Runtime API and processing engines. Python 3.11, CPU only.
+fastapi==0.159.1
+uvicorn==0.54.0
+python-multipart==0.0.32
+docling==2.141.0
+rapidocr==3.10.0
+onnxruntime==1.31.0
+faster-whisper==1.2.1
+av==16.1.0
+openpyxl==3.1.5
+xlrd==2.0.2
+olefile==0.47
+Pillow==12.0.0
+pypdfium2==5.14.0

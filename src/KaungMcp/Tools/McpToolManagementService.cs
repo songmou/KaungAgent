@@ -177,7 +177,8 @@ public sealed class McpToolManagementService(
             error ?? (succeeded ? null : "The tool returned an error result."),
             requestPayload,
             responsePayload,
-            source, correlationId);
+            source, correlationId ?? services.GetService<IHttpContextAccessor>()?.HttpContext?
+                .Items[KaungMcp.Content.ExecutionContextAccessor.SubmittedJobCorrelationKey] as string);
 
         return new TestMcpToolResponse(
             succeeded,
